@@ -17,6 +17,25 @@ async function runExtensionBuild() {
   fs.mkdirSync(path.join(outDir, 'popup'), { recursive: true });
   fs.mkdirSync(path.join(outDir, 'icons'), { recursive: true });
 
+  // 0. Build Page Bridge Script (MAIN world standalone IIFE)
+  console.log('0. Building page bridge script (MAIN world)...');
+  await build({
+    configFile: false,
+    define: {
+      'process.env.NODE_ENV': JSON.stringify('production')
+    },
+    build: {
+      outDir: path.join(outDir, 'content'),
+      emptyOutDir: false,
+      lib: {
+        entry: path.resolve(rootDir, 'src/extension/content/page-bridge.ts'),
+        name: 'CctvPageBridge',
+        formats: ['iife'],
+        fileName: () => 'page-bridge.js'
+      }
+    }
+  });
+
   // 1. Build Content Script as an IIFE (zero top-level imports, isolated, runs in classic content script)
   console.log('1. Building content script (IIFE standalone)...');
   await build({

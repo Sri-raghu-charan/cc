@@ -3,8 +3,6 @@
  * onto Google Earth 3D viewports and Google Maps Web Mercator viewports.
  */
 
-import { EARTH_RADIUS_METERS } from './coordinates';
-
 const TO_RAD = Math.PI / 180;
 const TO_DEG = 180 / Math.PI;
 
@@ -435,7 +433,7 @@ export function unprojectGoogleEarthScreen(
   screenY: number,
   view: GoogleEarthViewState,
   viewport: ViewportSize
-): { latitude: number; longitude: number } {
+): { latitude: number; longitude: number; elevation: number } {
   const { width, height } = viewport;
   const fovDeg = view.fov && view.fov > 0 ? view.fov : 35;
   const fovRad = fovDeg * TO_RAD;
@@ -539,6 +537,7 @@ export function unprojectGoogleEarthScreen(
 
   return {
     latitude: Number(lat.toFixed(7)),
-    longitude: Number(lon.toFixed(7))
+    longitude: Number(lon.toFixed(7)),
+    elevation: Number(targetAlt.toFixed(1))
   };
 }

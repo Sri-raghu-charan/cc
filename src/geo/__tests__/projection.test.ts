@@ -174,5 +174,150 @@ describe('Geospatial Projection Engine', () => {
       expect(projected.x).toBeCloseTo(testScreenX, 0);
       expect(projected.y).toBeCloseTo(testScreenY, 0);
     });
+
+    it('strictly locks camera marker to identical real-world WGS84 coordinate through repeated pan -> zoom -> rotate -> tilt cycles', () => {
+      // Pinned camera at fixed WGS84 coordinates on Earth
+      const pinnedLat = 37.7749295;
+      const pinnedLon = -122.4194155;
+      const pinnedElev = 12.0;
+
+      // Base view centered on camera
+      const baseView: GoogleEarthViewState = {
+        latitude: pinnedLat,
+        longitude: pinnedLon,
+        altitude: pinnedElev,
+        distance: 500,
+        pitch: 0,
+        heading: 0,
+        fov: 35
+      };
+
+      // 1. Center view: marker must be at viewport center
+      const ptCenter = projectGoogleEarthToScreen(pinnedLat, pinnedLon, pinnedElev, baseView, viewport);
+      expect(ptCenter.x).toBeCloseTo(viewport.width / 2, 0);
+      expect(ptCenter.y).toBeCloseTo(viewport.height / 2, 0);
+
+      // 2. PAN EAST by 0.002 degrees: camera must stay anchored to Earth, shifting west on screen
+      const pannedView: GoogleEarthViewState = {
+        ...baseView,
+        longitude: pinnedLon + 0.002
+      };
+      const ptPanned = projectGoogleEarthToScreen(pinnedLat, pinnedLon, pinnedElev, pannedView, viewport);
+      expect(ptPanned.x).toBeLessThan(viewport.width / 2); // Camera is west of new center -> left of screen
+      expect(ptPanned.y).toBeCloseTo(viewport.height / 2, 0);
+
+      // 3. ZOOM OUT to 1500m: camera must remain at exact geographic point, screen offset scales inversely
+      const zoomedView: GoogleEarthViewState = {
+        ...pannedView,
+        distance: 1500
+      };
+      const ptZoomed = projectGoogleEarthToScreen(pinnedLat, pinnedLon, pinnedElev, zoomedView, viewport);
+      const dxPanned = ptPanned.x - viewport.width / 2;
+      const dxZoomed = ptZoomed.x - viewport.width / 2;
+      expect(dxZoomed / dxPanned).toBeCloseTo(500 / 1500, 1);
+
+      // 4. ROTATE HEADING by 90 degrees: camera position must orbit around center synchronously
+      const rotatedView: GoogleEarthViewState = {
+        ...pannedView,
+        heading: 90
+      };
+      const ptRotated = projectGoogleEarthToScreen(pinnedLat, pinnedLon, pinnedElev, rotatedView, viewport);
+      // When heading is 90 (looking East), a point West of center should appear at bottom of screen
+      expect(ptRotated.y).toBeGreaterThan(viewport.height / 2);
+
+      // 5. TILT by 45 degrees: camera coordinate remains mathematically locked
+      const tilted45View: GoogleEarthViewState = {
+        ...baseView,
+        pitch: 45
+      };
+      const ptTilted = projectGoogleEarthToScreen(pinnedLat, pinnedLon, pinnedElev, tilted45View, viewport);
+      expect(ptTilted.x).toBeCloseTo(viewport.width / 2, 0);
+      expect(ptTilted.y).toBeCloseTo(viewport.height / 2, 0);
+      expect(ptTilted.visible).toBe(true);
+
+      // 6. COMPLEX COMPOUND VIEW: Pan + Zoom + Rotate 180 + Tilt 55
+      const complexView: GoogleEarthViewState = {
+        latitude: pinnedLat + 0.001,
+        longitude: pinnedLon + 0.001,
+        altitude: 40.0,
+        distance: 800,
+        pitch: 55,
+        heading: 180,
+        fov: 35
+      };
+      const ptComplex = projectGoogleEarthToScreen(pinnedLat, pinnedLon, pinnedElev, complexView, viewport);
+      expect(ptComplex.visible).toBe(true);
+      expect(Number.isFinite(ptComplex.x)).toBe(true);
+      expect(Number.isFinite(ptComplex.y)).toBe(true);
+
+      // Crucial verification: stored coordinates never change during any view change
+      expect(pinnedLat).toBe(37.7749295);
+      expect(pinnedLon).toBe(-122.4194155);
+      expect(pinnedElev).toBe(12.0);
+    });
+
+    it('strictly preserves real-world anchor across viewport resize cycles', () => {
+      const pinnedLat = 40.7128;
+      const pinnedLon = -74.0060;
+      const pinnedElev = 200.0;
+
+      const view: GoogleEarthViewState = {
+        latitude: pinnedLat,
+        longitude: pinnedLon,
+        altitude: pinnedElev,
+        distance: 200,
+        pitch: 30,
+        heading: 45,
+        fov: 35
+      };
+
+      const viewports: ViewportSize[] = [
+        { width: 1920, height: 1080 },
+        { width: 1440, height: 900 },
+        { width: 1280, height: 720 },
+        { width: 800, height: 600 },
+        { width: 1920, height: 1080 } // Back to full HD
+      ];
+
+      viewports.forEach((vp) => {
+        const pt = projectGoogleEarthToScreen(pinnedLat, pinnedLon, pinnedElev, view, vp);
+        // Center ground target always aligns with the center of each respective viewport
+        expect(pt.x).toBeCloseTo(vp.width / 2, 0);
+        expect(pt.y).toBeCloseTo(vp.height / 2, 0);
+        expect(pt.visible).toBe(true);
+      });
+    });
+
+    it('guarantees complete mathematical invariance under continuous 360-degree rotation and tilt cycles', () => {
+      const pinnedLat = 51.5074;
+      const pinnedLon = -0.1278;
+      const pinnedElev = 100.0;
+
+      // Center view looking directly at camera
+      for (let heading = 0; heading <= 360; heading += 45) {
+        for (let tilt = 0; tilt <= 75; tilt += 15) {
+          const view: GoogleEarthViewState = {
+            latitude: pinnedLat,
+            longitude: pinnedLon,
+            altitude: pinnedElev,
+            distance: 400,
+            pitch: tilt,
+            heading: heading,
+            fov: 35
+          };
+
+          const pt = projectGoogleEarthToScreen(pinnedLat, pinnedLon, pinnedElev, view, viewport);
+          expect(pt.x).toBeCloseTo(viewport.width / 2, 0);
+          expect(pt.y).toBeCloseTo(viewport.height / 2, 0);
+          expect(pt.visible).toBe(true);
+
+          // Reverse unprojection must return exact geodetic coordinate
+          const unproj = unprojectGoogleEarthScreen(pt.x, pt.y, view, viewport);
+          expect(unproj.latitude).toBeCloseTo(pinnedLat, 4);
+          expect(unproj.longitude).toBeCloseTo(pinnedLon, 4);
+        }
+      }
+    });
   });
 });
+

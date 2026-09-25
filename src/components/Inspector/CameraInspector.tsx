@@ -5,7 +5,6 @@ import { CircularCompass } from '../Compass/CircularCompass';
 import { GroundMovementControls } from '../Movement/GroundMovementControls';
 import { useCctv, JUNCTION_PRESETS, JunctionPresetType } from '../../context/CctvContext';
 import { calculateDoriDistances } from '../../geo/dori';
-import { urlWatcher } from '../../extension/services/urlWatcher';
 import {
   ShieldCheck,
   AlertTriangle,
@@ -14,7 +13,12 @@ import {
   Crosshair,
   Navigation,
   Check,
-  Zap
+  Zap,
+  Camera as CameraIcon,
+  Image as ImageIcon,
+  Download,
+  CheckCircle2,
+  Loader2
 } from 'lucide-react';
 
 interface CameraInspectorProps {
@@ -34,13 +38,63 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
     setIsRelocatingCamera,
     isAimingCamera,
     setIsAimingCamera,
-    relocateCamera,
-    applyJunctionPreset
+    applyJunctionPreset,
+    setFlyToTarget,
+    captureMapSnapshot,
+    saveProjectWithSnapshot,
+    lastMapSnapshot
   } = useCctv();
 
   const [modelSearch, setModelSearch] = useState<string>('');
   const [selectedManufacturer, setSelectedManufacturer] = useState<string>('All');
   const [showModelPicker, setShowModelPicker] = useState<boolean>(false);
+
+  const [isCapturingSnapshot, setIsCapturingSnapshot] = useState<boolean>(false);
+  const [isSavingSnapshot, setIsSavingSnapshot] = useState<boolean>(false);
+  const [snapshotMessage, setSnapshotMessage] = useState<string | null>(null);
+  const [previewSnapshot, setPreviewSnapshot] = useState<string | null>(null);
+
+  const handleCaptureSnapshotOnly = async () => {
+    try {
+      setIsCapturingSnapshot(true);
+      setSnapshotMessage(null);
+      const snap = await captureMapSnapshot();
+      if (snap) {
+        setPreviewSnapshot(snap);
+        const a = document.createElement('a');
+        a.href = snap;
+        a.download = `${camera.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_coverage_map_snapshot.png`;
+        a.click();
+        setSnapshotMessage('Coverage map snapshot captured & downloaded!');
+        setTimeout(() => setSnapshotMessage(null), 5000);
+      } else {
+        alert('Could not capture map snapshot. Ensure the map is loaded.');
+      }
+    } catch (err) {
+      console.error('Snapshot capture error:', err);
+      alert('Snapshot capture failed.');
+    } finally {
+      setIsCapturingSnapshot(false);
+    }
+  };
+
+  const handleSaveProjectAndSnapshot = async () => {
+    try {
+      setIsSavingSnapshot(true);
+      setSnapshotMessage(null);
+      const res = await saveProjectWithSnapshot(`cctv_${camera.name.replace(/[^a-zA-Z0-9_-]/g, '_')}`);
+      if (res.snapshotUrl) {
+        setPreviewSnapshot(res.snapshotUrl);
+      }
+      setSnapshotMessage('Project details & coverage snapshot saved successfully!');
+      setTimeout(() => setSnapshotMessage(null), 5000);
+    } catch (err) {
+      console.error('Save project error:', err);
+      alert('Failed to save project with snapshot.');
+    } finally {
+      setIsSavingSnapshot(false);
+    }
+  };
 
   const canUndo = (historyStack.get(camera.id)?.length || 0) > 0;
 
@@ -123,16 +177,6 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
     setShowModelPicker(false);
   };
 
-  const handleDropAtCenter = () => {
-    const st = urlWatcher.getState();
-    const groundAlt = st.earthView?.altitude || 0;
-    relocateCamera(camera.id, {
-      latitude: st.centerLat,
-      longitude: st.centerLon,
-      elevation: groundAlt
-    });
-  };
-
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
       {/* Quick Jump Bar for Quick Scrolling */}
@@ -193,6 +237,21 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
         >
           📊 Metrics
         </button>
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => document.getElementById('sec-snapshot')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
+          style={{
+            fontSize: '10px',
+            padding: '4px 8px',
+            borderRadius: '12px',
+            whiteSpace: 'nowrap',
+            border: '1px solid rgba(56, 189, 248, 0.4)',
+            color: '#38bdf8'
+          }}
+        >
+          📸 Snapshot
+        </button>
       </div>
 
       {/* Junction Placement & Real-Life Presets Card */}
@@ -228,10 +287,10 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
               alignItems: 'center',
               gap: '3px'
             }}
-            title="Click on the junction or street on the map to move camera there"
+            title="Enter Move Camera mode to place camera at a new location on the map"
           >
             <MapPin size={13} />
-            {isRelocatingCamera ? 'Click Map...' : 'Relocate'}
+            {isRelocatingCamera ? 'Click to Move' : 'Move Camera'}
           </button>
 
           <button
@@ -258,29 +317,6 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
           >
             <Crosshair size={13} />
             {isAimingCamera ? 'Click Road...' : 'Aim At'}
-          </button>
-
-          <button
-            type="button"
-            onClick={handleDropAtCenter}
-            style={{
-              padding: '6px 4px',
-              fontSize: '10px',
-              fontWeight: 600,
-              borderRadius: '8px',
-              border: '1px solid rgba(255,255,255,0.15)',
-              background: 'rgba(30, 41, 59, 0.8)',
-              color: '#ffffff',
-              cursor: 'pointer',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '3px'
-            }}
-            title="Move camera to the center of the current Google Earth screen"
-          >
-            <Navigation size={13} />
-            View Center
           </button>
         </div>
 
@@ -340,6 +376,21 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
         <div className="card-title">
           <span>Camera Identity</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setFlyToTarget({
+                latitude: camera.position.latitude,
+                longitude: camera.position.longitude,
+                elevation: camera.position.elevation || 0,
+                heading: camera.heading
+              })}
+              style={{ fontSize: '11px', padding: '3px 8px', display: 'flex', alignItems: 'center', gap: '4px' }}
+              title="Fly view to this camera's location"
+            >
+              <Navigation size={12} />
+              Fly Here
+            </button>
             <input
               type="color"
               aria-label="Camera color marker"
@@ -370,6 +421,42 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
             value={camera.name}
             onChange={(e) => updateCamera(camera.id, { name: e.target.value })}
           />
+        </div>
+
+        {/* Persistent Strict Geo-Anchoring Readout */}
+        <div
+          style={{
+            marginTop: '8px',
+            padding: '6px 10px',
+            background: 'rgba(15, 23, 42, 0.7)',
+            borderRadius: '6px',
+            border: '1px solid rgba(56, 189, 248, 0.25)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: '11px'
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '5px', color: '#94a3b8' }}>
+            <span>🔒</span>
+            <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Geo-Anchored:</span>
+            <span style={{ fontFamily: 'var(--font-mono)', color: '#38bdf8' }}>
+              {camera.position.latitude.toFixed(6)}°, {camera.position.longitude.toFixed(6)}°
+            </span>
+          </div>
+          <span
+            style={{
+              fontSize: '9.5px',
+              background: 'rgba(16, 185, 129, 0.2)',
+              color: '#34d399',
+              padding: '1px 6px',
+              borderRadius: '4px',
+              fontWeight: 600,
+              border: '1px solid rgba(16, 185, 129, 0.3)'
+            }}
+          >
+            LOCKED
+          </span>
         </div>
       </div>
 
@@ -920,6 +1007,205 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
           </div>
         </div>
       )}
+
+      {/* Dedicated Camera Coverage Snapshot Section */}
+      <div
+        id="sec-snapshot"
+        className="card-section"
+        style={{
+          border: '1px solid rgba(56, 189, 248, 0.45)',
+          background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.95) 0%, rgba(30, 41, 59, 0.85) 100%)',
+          borderRadius: '12px',
+          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.4)'
+        }}
+      >
+        <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 700 }}>
+            <CameraIcon size={14} /> Camera Coverage Snapshot
+          </span>
+          <span
+            style={{
+              fontSize: '10px',
+              background: 'rgba(56, 189, 248, 0.18)',
+              color: '#38bdf8',
+              padding: '2px 8px',
+              borderRadius: '10px',
+              fontWeight: 600,
+              border: '1px solid rgba(56, 189, 248, 0.3)'
+            }}
+          >
+            Real Map Coverage
+          </span>
+        </div>
+
+        <p style={{ fontSize: '11px', color: '#94a3b8', margin: '4px 0 10px', lineHeight: 1.4 }}>
+          Captures the exact geographic region covered by this camera on the real satellite map, framed tightly to its DORI optical reach.
+        </p>
+
+        {/* Coverage Snapshot Action Buttons */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleCaptureSnapshotOnly}
+            disabled={isCapturingSnapshot || isSavingSnapshot}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              padding: '9px 14px',
+              fontWeight: 600,
+              background: 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)',
+              boxShadow: '0 4px 12px rgba(2, 132, 199, 0.35)'
+            }}
+          >
+            {isCapturingSnapshot ? (
+              <>
+                <Loader2 size={15} className="spin-animation" />
+                Capturing Coverage Map...
+              </>
+            ) : (
+              <>
+                <CameraIcon size={15} />
+                Capture Coverage Snapshot (PNG)
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={handleSaveProjectAndSnapshot}
+            disabled={isCapturingSnapshot || isSavingSnapshot}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              padding: '8px 12px',
+              fontSize: '11.5px',
+              background: 'rgba(255, 255, 255, 0.06)'
+            }}
+          >
+            {isSavingSnapshot ? (
+              <>
+                <Loader2 size={14} className="spin-animation" />
+                Saving Project & Snapshot...
+              </>
+            ) : (
+              <>
+                <Download size={14} />
+                Save Project & Snapshot (JSON + PNG)
+              </>
+            )}
+          </button>
+        </div>
+
+        {/* Success Feedback Alert */}
+        {snapshotMessage && (
+          <div
+            style={{
+              marginTop: '10px',
+              padding: '8px 12px',
+              background: 'rgba(16, 185, 129, 0.15)',
+              border: '1px solid rgba(16, 185, 129, 0.4)',
+              borderRadius: '8px',
+              color: '#34d399',
+              fontSize: '11px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+          >
+            <CheckCircle2 size={14} />
+            <span>{snapshotMessage}</span>
+          </div>
+        )}
+
+        {/* Snapshot Preview Card */}
+        {(previewSnapshot || lastMapSnapshot) && (
+          <div
+            style={{
+              marginTop: '12px',
+              border: '1px solid rgba(148, 163, 184, 0.2)',
+              borderRadius: '8px',
+              overflow: 'hidden',
+              background: 'rgba(15, 23, 42, 0.8)'
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: '6px 10px',
+                background: 'rgba(30, 41, 59, 0.6)',
+                borderBottom: '1px solid rgba(148, 163, 184, 0.15)',
+                fontSize: '10.5px',
+                color: '#cbd5e1'
+              }}
+            >
+              <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
+                <ImageIcon size={12} /> Coverage Region Preview
+              </span>
+              <a
+                href={previewSnapshot || lastMapSnapshot || '#'}
+                download={`${camera.name.replace(/[^a-zA-Z0-9_-]/g, '_')}_coverage_map_snapshot.png`}
+                style={{
+                  color: '#38bdf8',
+                  textDecoration: 'none',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  fontWeight: 600
+                }}
+              >
+                Download <Download size={11} />
+              </a>
+            </div>
+
+            <div style={{ position: 'relative', width: '100%', maxHeight: '220px', overflow: 'hidden', background: '#0b1120' }}>
+              <img
+                src={previewSnapshot || lastMapSnapshot || ''}
+                alt="Camera Coverage Snapshot Preview"
+                style={{
+                  width: '100%',
+                  height: 'auto',
+                  display: 'block',
+                  objectFit: 'contain'
+                }}
+              />
+            </div>
+
+            {/* Quick Metadata Readout */}
+            <div
+              style={{
+                padding: '8px 10px',
+                display: 'grid',
+                gridTemplateColumns: 'repeat(2, 1fr)',
+                gap: '6px',
+                fontSize: '10px',
+                background: 'rgba(15, 23, 42, 0.95)',
+                borderTop: '1px solid rgba(148, 163, 184, 0.1)'
+              }}
+            >
+              <div>
+                <span style={{ color: '#64748b' }}>Pinned GPS:</span>{' '}
+                <span style={{ color: '#e2e8f0', fontFamily: 'var(--font-mono)' }}>
+                  {camera.position.latitude.toFixed(5)}°, {camera.position.longitude.toFixed(5)}°
+                </span>
+              </div>
+              <div style={{ textAlign: 'right' }}>
+                <span style={{ color: '#64748b' }}>Monitored Area:</span>{' '}
+                <span style={{ color: '#38bdf8', fontWeight: 600 }}>
+                  {activeFootprint ? `${Math.round(activeFootprint.totalAreaM2).toLocaleString()} m²` : 'Active'}
+                </span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };

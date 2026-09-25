@@ -13,6 +13,8 @@ import {
 import { computeBearing } from '../../geo/coordinates';
 import { DORI_COLORS } from '../../geo/dori';
 import { VERIFIED_CAMERA_MODELS } from '../../data/cameraModels';
+import { getCameraIconUri } from '../../utils/cameraIcons';
+import { renderCameraCoverageSnapshot } from '../../utils/satelliteMapCapture';
 
 interface MapOverlayCanvasProps {
   onSelectCamera?: (id: string) => void;
@@ -27,10 +29,6 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
 
   const [mapState, setMapState] = useState<CurrentMapState>(() => urlWatcher.getState());
   const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
-
-  // Dragging & Aiming interactive states
-  const [draggingCamId, setDraggingCamId] = useState<string | null>(null);
-  const [aimingCamId, setAimingCamId] = useState<string | null>(null);
 
   const {
     cameras,
@@ -49,9 +47,8 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
     addCameraAtCoordinates,
     relocateCamera,
     aimCameraAt,
-    updateCamera,
-    rotateCamera,
-    selectCamera
+    selectCamera,
+    registerSnapshotProvider
   } = useCctv();
 
   // Resize listener
@@ -84,39 +81,209 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [isSpecialMode]);
 
-  // Project point with exact terrain elevation anchoring
+  // Project point with exact terrain elevation anchoring from live map view state
   const groundAlt = mapState.platform === 'earth' && mapState.earthView ? (mapState.earthView.altitude || 0) : 0;
 
   const projectPoint = useCallback(
-    (lat: number, lon: number, elev: number = groundAlt): ScreenPoint => {
-      if (mapState.platform === 'earth' && mapState.earthView) {
-        return projectGoogleEarthToScreen(lat, lon, elev, mapState.earthView, viewport);
+    (lat: number, lon: number, elev: number = 0): ScreenPoint => {
+      const liveState = urlWatcher.getState();
+      if (liveState.platform === 'earth' && liveState.earthView) {
+        return projectGoogleEarthToScreen(lat, lon, elev, liveState.earthView, viewport);
       }
-      const mapsView = mapState.mapsView || {
-        latitude: mapState.centerLat,
-        longitude: mapState.centerLon,
-        zoom: mapState.altitudeOrZoom || 18
+      const mapsView = liveState.mapsView || {
+        latitude: liveState.centerLat,
+        longitude: liveState.centerLon,
+        zoom: liveState.altitudeOrZoom || 18
       };
       return projectGoogleMapsToScreen(lat, lon, mapsView, viewport);
     },
-    [mapState, viewport, groundAlt]
+    [viewport]
   );
 
-  // Unproject screen point to geographic coordinates
+  // Unproject screen point to geographic coordinates with exact WGS84 ground altitude
   const unprojectPoint = useCallback(
-    (screenX: number, screenY: number): { latitude: number; longitude: number } => {
-      if (mapState.platform === 'earth' && mapState.earthView) {
-        return unprojectGoogleEarthScreen(screenX, screenY, mapState.earthView, viewport);
+    (screenX: number, screenY: number): { latitude: number; longitude: number; elevation: number } => {
+      const liveState = urlWatcher.getState();
+      if (liveState.platform === 'earth' && liveState.earthView) {
+        return unprojectGoogleEarthScreen(screenX, screenY, liveState.earthView, viewport);
       }
-      const mapsView = mapState.mapsView || {
-        latitude: mapState.centerLat,
-        longitude: mapState.centerLon,
-        zoom: mapState.altitudeOrZoom || 18
+      const mapsView = liveState.mapsView || {
+        latitude: liveState.centerLat,
+        longitude: liveState.centerLon,
+        zoom: liveState.altitudeOrZoom || 18
       };
-      return unprojectGoogleMapsScreen(screenX, screenY, mapsView, viewport);
+      const unproj = unprojectGoogleMapsScreen(screenX, screenY, mapsView, viewport);
+      return { ...unproj, elevation: 0 };
     },
-    [mapState, viewport]
+    [viewport]
   );
+
+  // Register Map Snapshot Provider for saving project with map snapshot of the covered camera region
+  useEffect(() => {
+    return registerSnapshotProvider(async () => {
+      const overlayCanvas = canvasRef.current;
+      if (!overlayCanvas) return null;
+
+      try {
+        // 1. Determine target camera(s) to frame
+        const targetCams = cameras.filter((c) => c.visible && (activeCameraId ? c.id === activeCameraId : true));
+        if (targetCams.length === 0 && cameras.length > 0) {
+          const visible = cameras.filter((c) => c.visible);
+          targetCams.push(...(visible.length > 0 ? visible : [cameras[0]]));
+        }
+
+        // 2. Collect all screen points for the camera and its covered footprint & DORI zones
+        const screenPoints: { x: number; y: number }[] = [];
+        targetCams.forEach((cam) => {
+          const camElev = groundAlt;
+          const gPt = projectPoint(cam.position.latitude, cam.position.longitude, camElev);
+          if (gPt.visible) screenPoints.push({ x: gPt.x, y: gPt.y });
+
+          const lPt = projectPoint(cam.position.latitude, cam.position.longitude, camElev + cam.mountingHeight);
+          if (lPt.visible) screenPoints.push({ x: lPt.x, y: lPt.y });
+
+          const fp = footprints.get(cam.id);
+          if (fp && fp.coordinates) {
+            fp.coordinates.forEach((coord) => {
+              const pt = projectPoint(coord.latitude, coord.longitude, camElev);
+              if (pt.visible) screenPoints.push({ x: pt.x, y: pt.y });
+            });
+            if (fp.doriZones) {
+              const zones = [
+                fp.doriZones.identification,
+                fp.doriZones.recognition,
+                fp.doriZones.observation,
+                fp.doriZones.detection
+              ];
+              zones.forEach((z) => {
+                if (z) {
+                  z.forEach((coord) => {
+                    const pt = projectPoint(coord.latitude, coord.longitude, camElev);
+                    if (pt.visible) screenPoints.push({ x: pt.x, y: pt.y });
+                  });
+                }
+              });
+            }
+          }
+        });
+
+        const width = viewport.width;
+        const height = viewport.height;
+        const dpr = window.devicePixelRatio || 1;
+
+        // Calculate bounding box around camera covered area
+        let cropX = 0;
+        let cropY = 0;
+        let cropW = width;
+        let cropH = height;
+
+        if (screenPoints.length >= 2) {
+          let minX = Infinity;
+          let maxX = -Infinity;
+          let minY = Infinity;
+          let maxY = -Infinity;
+
+          screenPoints.forEach((p) => {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+          });
+
+          const boxW = Math.max(10, maxX - minX);
+          const boxH = Math.max(10, maxY - minY);
+
+          // Tightly frame the camera coverage area on the map (20% padding, min 45px)
+          const padX = Math.max(45, boxW * 0.20);
+          const padY = Math.max(45, boxH * 0.20);
+
+          const rawCropX = minX - padX;
+          const rawCropY = minY - padY;
+          const rawCropW = boxW + padX * 2;
+          const rawCropH = boxH + padY * 2;
+
+          cropX = Math.max(0, Math.floor(rawCropX));
+          cropY = Math.max(0, Math.floor(rawCropY));
+          cropW = Math.min(width - cropX, Math.ceil(rawCropW));
+          cropH = Math.min(height - cropY, Math.ceil(rawCropH));
+
+          // Ensure sensible minimum frame size (at least 400x300)
+          if (cropW < 400) {
+            const diff = 400 - cropW;
+            cropX = Math.max(0, cropX - diff / 2);
+            cropW = Math.min(width - cropX, 400);
+          }
+          if (cropH < 300) {
+            const diff = 300 - cropH;
+            cropY = Math.max(0, cropY - diff / 2);
+            cropH = Math.min(height - cropY, 300);
+          }
+        }
+
+        // 3. Acquire background Earth satellite image
+        let earthImage: HTMLImageElement | null = null;
+        if (typeof chrome !== 'undefined' && chrome.runtime?.sendMessage) {
+          try {
+            const response = await new Promise<{ success: boolean; dataUrl?: string }>((resolve) => {
+              chrome.runtime.sendMessage({ type: 'CAPTURE_VISIBLE_TAB' }, (res) => {
+                if (chrome.runtime?.lastError || !res) {
+                  resolve({ success: false });
+                } else {
+                  resolve(res);
+                }
+              });
+            });
+
+            if (response && response.success && response.dataUrl) {
+              earthImage = await new Promise<HTMLImageElement | null>((res) => {
+                const img = new Image();
+                img.onload = () => res(img);
+                img.onerror = () => res(null);
+                img.src = response.dataUrl!;
+              });
+            }
+          } catch {
+            // Fallback to DOM canvas
+          }
+        }
+
+        const camToStamp = targetCams[0];
+        if (!camToStamp) return overlayCanvas.toDataURL('image/png');
+
+        const fp = footprints.get(camToStamp.id);
+
+        return await renderCameraCoverageSnapshot({
+          camera: camToStamp,
+          footprint: fp,
+          doriLayers,
+          capturedScreenImage: earthImage,
+          capturedScreenCrop: {
+            cropX,
+            cropY,
+            cropW,
+            cropH,
+            totalW: width,
+            totalH: height
+          },
+          overlayCanvas,
+          dpr,
+          targetWidth: Math.max(900, Math.round(cropW * dpr)),
+          targetHeight: Math.max(600, Math.round(cropH * dpr))
+        });
+      } catch (err) {
+        console.warn('Map overlay camera region snapshot capture error:', err);
+        return overlayCanvas.toDataURL('image/png');
+      }
+    });
+  }, [
+    registerSnapshotProvider,
+    cameras,
+    activeCameraId,
+    footprints,
+    groundAlt,
+    projectPoint,
+    viewport
+  ]);
 
   // Handle map click in placement, relocate, or aim mode
   const handleMapActionClick = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -127,7 +294,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
 
     if (isPlacingCamera) {
       const newCam = addCameraAtCoordinates(
-        { latitude: coords.latitude, longitude: coords.longitude, elevation: groundAlt },
+        { latitude: coords.latitude, longitude: coords.longitude, elevation: coords.elevation ?? groundAlt },
         VERIFIED_CAMERA_MODELS[0]
       );
       selectCamera(newCam.id);
@@ -139,8 +306,9 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
       relocateCamera(activeCameraId, {
         latitude: coords.latitude,
         longitude: coords.longitude,
-        elevation: groundAlt
+        elevation: coords.elevation ?? groundAlt
       });
+      setIsRelocatingCamera(false);
       return;
     }
 
@@ -148,78 +316,79 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
       aimCameraAt(activeCameraId, {
         latitude: coords.latitude,
         longitude: coords.longitude,
-        elevation: groundAlt
+        elevation: coords.elevation ?? groundAlt
       });
+      setIsAimingCamera(false);
       return;
     }
   };
 
-  // Direct Dragging of camera markers
-  const handleMarkerPointerDown = (camId: string, e: React.PointerEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    selectCamera(camId);
-    if (onSelectCamera) onSelectCamera(camId);
-    setDraggingCamId(camId);
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  };
+  // Non-blocking camera click selection on map (zero interference with Google Earth pans/tilts)
+  const clickStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
 
-  const handleMarkerPointerMove = (camId: string, e: React.PointerEvent) => {
-    if (draggingCamId !== camId) return;
-    const coords = unprojectPoint(e.clientX, e.clientY);
-    updateCamera(camId, {
-      position: {
-        latitude: coords.latitude,
-        longitude: coords.longitude,
-        elevation: groundAlt
+  useEffect(() => {
+    const handlePointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('.cctv-floating-bar-wrapper, .cctv-streetview-modal, button, input, select')) {
+        return;
       }
-    });
-  };
+      clickStartRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
+    };
 
-  const handleMarkerPointerUp = (camId: string, e: React.PointerEvent) => {
-    if (draggingCamId === camId) {
-      setDraggingCamId(null);
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {
-        // Ignored
+    const handlePointerUp = (e: PointerEvent) => {
+      if (!clickStartRef.current) return;
+      const { x: startX, y: startY, time: startTime } = clickStartRef.current;
+      clickStartRef.current = null;
+
+      // If user moved more than 6px or held longer than 500ms, it was a pan/tilt drag, not a marker click
+      const dist = Math.hypot(e.clientX - startX, e.clientY - startY);
+      const elapsed = Date.now() - startTime;
+      if (dist > 6 || elapsed > 500) return;
+
+      const target = e.target as HTMLElement | null;
+      if (target?.closest?.('.cctv-floating-bar-wrapper, .cctv-streetview-modal, button, input, select')) {
+        return;
       }
-    }
-  };
 
-  // Direct Aiming via heading handle drag
-  const handleAimPointerDown = (camId: string, e: React.PointerEvent) => {
-    e.stopPropagation();
-    e.preventDefault();
-    selectCamera(camId);
-    setAimingCamId(camId);
-    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  };
+      // Check click against camera markers projected using live view state
+      const liveState = urlWatcher.forceCheck();
+      const proj = (lat: number, lon: number, el: number): ScreenPoint => {
+        if (liveState.platform === 'earth' && liveState.earthView) {
+          return projectGoogleEarthToScreen(lat, lon, el, liveState.earthView, viewport);
+        }
+        const mapsView = liveState.mapsView || {
+          latitude: liveState.centerLat,
+          longitude: liveState.centerLon,
+          zoom: liveState.altitudeOrZoom || 18
+        };
+        return projectGoogleMapsToScreen(lat, lon, mapsView, viewport);
+      };
 
-  const handleAimPointerMove = (camId: string, e: React.PointerEvent) => {
-    if (aimingCamId !== camId) return;
-    const cam = cameras.find((c) => c.id === camId);
-    if (!cam) return;
-    const targetCoords = unprojectPoint(e.clientX, e.clientY);
-    const bearing = computeBearing(
-      cam.position.latitude,
-      cam.position.longitude,
-      targetCoords.latitude,
-      targetCoords.longitude
-    );
-    rotateCamera(camId, bearing);
-  };
+      for (let i = cameras.length - 1; i >= 0; i--) {
+        const cam = cameras[i];
+        if (!cam.visible) continue;
+        const pt = proj(cam.position.latitude, cam.position.longitude, cam.position.elevation || 0);
+        if (!pt.visible) continue;
 
-  const handleAimPointerUp = (camId: string, e: React.PointerEvent) => {
-    if (aimingCamId === camId) {
-      setAimingCamId(null);
-      try {
-        (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
-      } catch {
-        // Ignored
+        const distGround = Math.hypot(e.clientX - pt.x, e.clientY - pt.y);
+        const inBadge = Math.abs(e.clientX - pt.x) <= 60 && e.clientY >= pt.y - 48 && e.clientY <= pt.y - 14;
+
+        if (distGround <= 22 || inBadge) {
+          selectCamera(cam.id);
+          if (onSelectCamera) onSelectCamera(cam.id);
+          break;
+        }
       }
-    }
-  };
+    };
+
+    window.addEventListener('pointerdown', handlePointerDown, { capture: true, passive: true });
+    window.addEventListener('pointerup', handlePointerUp, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown, { capture: true });
+      window.removeEventListener('pointerup', handlePointerUp, { capture: true });
+    };
+  }, [cameras, viewport, selectCamera, onSelectCamera]);
 
   // Render loop using Canvas 2D
   useEffect(() => {
@@ -248,24 +417,40 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
       ctx.scale(dpr, dpr);
       ctx.clearRect(0, 0, width, height);
 
+      // Force-check live map state synchronously to eliminate any frame lag during pans/tilts
+      const currentMapState = urlWatcher.forceCheck();
+
+      // Realtime projection helper using exact instantaneous view state
+      const projectPointRealtime = (lat: number, lon: number, elev: number = 0): ScreenPoint => {
+        if (currentMapState.platform === 'earth' && currentMapState.earthView) {
+          return projectGoogleEarthToScreen(lat, lon, elev, currentMapState.earthView, viewport);
+        }
+        const mapsView = currentMapState.mapsView || {
+          latitude: currentMapState.centerLat,
+          longitude: currentMapState.centerLon,
+          zoom: currentMapState.altitudeOrZoom || 18
+        };
+        return projectGoogleMapsToScreen(lat, lon, mapsView, viewport);
+      };
+
       // Helper to draw projected polygon with 3D near-plane clipping
       const drawPolygon = (
         coords: { latitude: number; longitude: number }[],
         fillStyle: string,
         strokeStyle: string,
         lineWidth: number = 1.5,
-        elev: number = groundAlt
+        elev: number = 0
       ) => {
         if (!coords || coords.length < 3) return;
 
         let screenPts: { x: number; y: number }[] = [];
-        if (mapState.platform === 'earth' && mapState.earthView) {
-          screenPts = projectGoogleEarthPolygon(coords, elev, mapState.earthView, viewport);
+        if (currentMapState.platform === 'earth' && currentMapState.earthView) {
+          screenPts = projectGoogleEarthPolygon(coords, elev, currentMapState.earthView, viewport);
         } else {
-          const mapsView = mapState.mapsView || {
-            latitude: mapState.centerLat,
-            longitude: mapState.centerLon,
-            zoom: mapState.altitudeOrZoom || 18
+          const mapsView = currentMapState.mapsView || {
+            latitude: currentMapState.centerLat,
+            longitude: currentMapState.centerLon,
+            zoom: currentMapState.altitudeOrZoom || 18
           };
           screenPts = coords
             .map((c) => projectGoogleMapsToScreen(c.latitude, c.longitude, mapsView, viewport))
@@ -300,10 +485,11 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
 
         const isSelected = cam.id === activeCameraId;
         const fp = footprints.get(cam.id);
-        const camElev = cam.position.elevation ?? groundAlt;
+        // STRICT GEO-ANCHOR: camera elevation is locked to its stored ground coordinate
+        const camElev = cam.position.elevation ?? 0;
 
-        const groundPt = projectPoint(cam.position.latitude, cam.position.longitude, camElev);
-        const lensPt = projectPoint(
+        const groundPt = projectPointRealtime(cam.position.latitude, cam.position.longitude, camElev);
+        const lensPt = projectPointRealtime(
           cam.position.latitude,
           cam.position.longitude,
           camElev + cam.mountingHeight
@@ -342,7 +528,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
               const midIdx = Math.floor(coords.length / 2);
               const pt = coords[midIdx];
               if (!pt) return;
-              const scr = projectPoint(pt.latitude, pt.longitude, camElev);
+              const scr = projectPointRealtime(pt.latitude, pt.longitude, camElev);
               if (!scr.visible) return;
 
               ctx.save();
@@ -399,7 +585,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
             cornerIndices.forEach((idx) => {
               const corner = fp.coordinates[idx];
               if (corner) {
-                const cornerPt = projectPoint(corner.latitude, corner.longitude, camElev);
+                const cornerPt = projectPointRealtime(corner.latitude, corner.longitude, camElev);
                 if (cornerPt.visible) {
                   ctx.beginPath();
                   ctx.moveTo(lensPt.x, lensPt.y);
@@ -412,34 +598,94 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
           }
         }
 
+        // Fixed Ground Markup Point on the map with Realistic CCTV Camera Icon
+        if (groundPt.visible) {
+          // Pulse target ring for selected camera
+          if (isSelected) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(groundPt.x, groundPt.y, 14, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(56, 189, 248, 0.25)';
+            ctx.fill();
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // Solid ground markup pin base sticking to map
+          ctx.beginPath();
+          ctx.arc(groundPt.x, groundPt.y, 6, 0, Math.PI * 2);
+          ctx.fillStyle = '#0f172a';
+          ctx.fill();
+          ctx.strokeStyle = isSelected ? '#38bdf8' : (cam.color || '#3b82f6');
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          // Center crosshair pip
+          ctx.beginPath();
+          ctx.arc(groundPt.x, groundPt.y, 2, 0, Math.PI * 2);
+          ctx.fillStyle = '#ffffff';
+          ctx.fill();
+
+          // Draw realistic CCTV security camera body and lens oriented to camera heading
+          ctx.save();
+          ctx.translate(groundPt.x, groundPt.y);
+          ctx.rotate((cam.heading - 90) * (Math.PI / 180));
+
+          // Swivel mounting arm / bracket
+          ctx.fillStyle = '#64748b';
+          ctx.fillRect(-7, -1.5, 5, 3);
+
+          // Weatherproof camera enclosure body
+          ctx.fillStyle = '#f8fafc';
+          ctx.strokeStyle = isSelected ? '#38bdf8' : (cam.color || '#3b82f6');
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.roundRect(-2, -5, 14, 10, 2);
+          ctx.fill();
+          ctx.stroke();
+
+          // Sun canopy / protective visor hood
+          ctx.fillStyle = '#334155';
+          ctx.fillRect(-1, -6.5, 15, 2);
+
+          // Front optical lens barrel & aperture
+          ctx.fillStyle = '#0f172a';
+          ctx.fillRect(12, -3.5, 3.5, 7);
+          ctx.fillStyle = '#38bdf8';
+          ctx.beginPath();
+          ctx.arc(13.5, 0, 1.4, 0, Math.PI * 2);
+          ctx.fill();
+
+          // Red recording indicator LED
+          ctx.fillStyle = '#ef4444';
+          ctx.beginPath();
+          ctx.arc(5, -2.5, 1.2, 0, Math.PI * 2);
+          ctx.fill();
+
+          ctx.restore();
+        }
+
         // Camera Mounting Pole in 3D perspective
-        if (groundPt.visible && lensPt.visible) {
+        if (groundPt.visible && lensPt.visible && cam.mountingHeight > 0.5) {
           ctx.beginPath();
           ctx.moveTo(groundPt.x, groundPt.y);
           ctx.lineTo(lensPt.x, lensPt.y);
           ctx.strokeStyle = isSelected ? '#38bdf8' : '#94a3b8';
-          ctx.lineWidth = isSelected ? 3 : 2;
-          ctx.stroke();
-
-          // Pole ground base anchor
-          ctx.beginPath();
-          ctx.arc(groundPt.x, groundPt.y, 4, 0, Math.PI * 2);
-          ctx.fillStyle = '#475569';
-          ctx.fill();
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1.5;
+          ctx.lineWidth = isSelected ? 2.5 : 1.5;
           ctx.stroke();
         }
 
-        // Heading Direction Line & Arrow
-        if (lensPt.visible) {
-          const arrowLen = 36;
+        // Heading Direction Line & Arrow extending from fixed ground markup point
+        if (groundPt.visible) {
+          const arrowLen = 38;
           const rad = (cam.heading - 90) * (Math.PI / 180);
-          const endX = lensPt.x + arrowLen * Math.cos(rad);
-          const endY = lensPt.y + arrowLen * Math.sin(rad);
+          const endX = groundPt.x + arrowLen * Math.cos(rad);
+          const endY = groundPt.y + arrowLen * Math.sin(rad);
 
           ctx.beginPath();
-          ctx.moveTo(lensPt.x, lensPt.y);
+          ctx.moveTo(groundPt.x, groundPt.y);
           ctx.lineTo(endX, endY);
           ctx.strokeStyle = cam.color || '#3b82f6';
           ctx.lineWidth = 2.5;
@@ -454,6 +700,41 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
           ctx.closePath();
           ctx.fillStyle = cam.color || '#3b82f6';
           ctx.fill();
+        }
+
+        // Camera Name & Height Pill Badge (Anchored directly on canvas at 60 FPS)
+        if (groundPt.visible) {
+          ctx.save();
+          const badgeText = `${cam.name} (${cam.mountingHeight}m)`;
+          ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
+          const textMetrics = ctx.measureText(badgeText);
+          const badgeW = textMetrics.width + 30;
+          const badgeH = 22;
+          const badgeX = groundPt.x - badgeW / 2;
+          const badgeY = groundPt.y - 36;
+
+          // Badge pill container
+          ctx.beginPath();
+          ctx.roundRect(badgeX, badgeY, badgeW, badgeH, 11);
+          ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+          ctx.fill();
+          ctx.strokeStyle = isSelected ? '#38bdf8' : (cam.color || 'rgba(255, 255, 255, 0.25)');
+          ctx.lineWidth = isSelected ? 2 : 1;
+          ctx.stroke();
+
+          // Lock indicator icon
+          ctx.font = '10px system-ui, sans-serif';
+          ctx.fillStyle = '#38bdf8';
+          ctx.textAlign = 'left';
+          ctx.textBaseline = 'middle';
+          ctx.fillText('🔒', badgeX + 7, badgeY + badgeH / 2);
+
+          // Camera Name & Height
+          ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
+          ctx.fillStyle = '#ffffff';
+          ctx.fillText(badgeText, badgeX + 23, badgeY + badgeH / 2);
+
+          ctx.restore();
         }
       });
 
@@ -540,146 +821,23 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
         }}
       />
 
-      {/* Interactive Layer for draggable camera markers & aim handles */}
-      <div
-        className="cctv-interactive-layer"
-        onClick={isSpecialMode ? handleMapActionClick : undefined}
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          width: '100vw',
-          height: '100vh',
-          zIndex: isSpecialMode ? 99990 : 101,
-          pointerEvents: isSpecialMode ? 'auto' : 'none',
-          cursor: isSpecialMode ? 'crosshair' : 'default'
-        }}
-      >
-        {!isSpecialMode &&
-          cameras.map((cam) => {
-            if (!cam.visible) return null;
-            const isSelected = cam.id === activeCameraId;
-            const lensPt = projectPoint(
-              cam.position.latitude,
-              cam.position.longitude,
-              groundAlt + cam.mountingHeight
-            );
-
-            if (!lensPt.visible) return null;
-
-            const arrowLen = 36;
-            const rad = (cam.heading - 90) * (Math.PI / 180);
-            const aimHandleX = lensPt.x + arrowLen * Math.cos(rad);
-            const aimHandleY = lensPt.y + arrowLen * Math.sin(rad);
-
-            return (
-              <React.Fragment key={cam.id}>
-                {/* Camera Marker Badge (Locked in place unless in relocate mode) */}
-                <div
-                  onPointerDown={isRelocatingCamera ? (e) => handleMarkerPointerDown(cam.id, e) : undefined}
-                  onPointerMove={isRelocatingCamera ? (e) => handleMarkerPointerMove(cam.id, e) : undefined}
-                  onPointerUp={isRelocatingCamera ? (e) => handleMarkerPointerUp(cam.id, e) : undefined}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    selectCamera(cam.id);
-                    if (onSelectCamera) onSelectCamera(cam.id);
-                  }}
-                  title={isRelocatingCamera ? "Drag to move camera to junction" : "Click to select camera (Position locked)"}
-                  style={{
-                    position: 'absolute',
-                    left: `${lensPt.x}px`,
-                    top: `${lensPt.y}px`,
-                    transform: 'translate(-50%, -50%)',
-                    pointerEvents: 'auto',
-                    cursor: isRelocatingCamera ? (draggingCamId === cam.id ? 'grabbing' : 'grab') : 'pointer',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'center',
-                    userSelect: 'none',
-                    zIndex: isSelected ? 105 : 102
-                  }}
-                >
-                  {/* Outer glow ring when selected */}
-                  <div
-                    style={{
-                      width: isSelected ? '28px' : '22px',
-                      height: isSelected ? '28px' : '22px',
-                      borderRadius: '50%',
-                      background: cam.color || '#3b82f6',
-                      border: '2px solid #ffffff',
-                      boxShadow: isSelected
-                        ? '0 0 0 5px rgba(56, 189, 248, 0.4), 0 4px 12px rgba(0,0,0,0.5)'
-                        : '0 2px 8px rgba(0,0,0,0.4)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      transition: 'transform 0.15s ease'
-                    }}
-                  >
-                    <span style={{ fontSize: '11px', lineHeight: 1 }}>📹</span>
-                  </div>
-
-                  {/* Camera Name & Mounting Height Label */}
-                  <div
-                    style={{
-                      marginTop: '4px',
-                      background: 'rgba(15, 23, 42, 0.88)',
-                      backdropFilter: 'blur(4px)',
-                      border: isSelected ? '1px solid #38bdf8' : '1px solid rgba(255,255,255,0.2)',
-                      borderRadius: '10px',
-                      padding: '2px 8px',
-                      fontSize: '11px',
-                      fontWeight: 600,
-                      color: '#ffffff',
-                      whiteSpace: 'nowrap',
-                      boxShadow: '0 2px 6px rgba(0,0,0,0.4)',
-                      pointerEvents: 'none'
-                    }}
-                  >
-                    {cam.name} ({cam.mountingHeight}m)
-                  </div>
-                </div>
-
-                {/* Heading Aim Bead Handle (Draggable to rotate camera) */}
-                {isSelected && (
-                  <div
-                    onPointerDown={(e) => handleAimPointerDown(cam.id, e)}
-                    onPointerMove={(e) => handleAimPointerMove(cam.id, e)}
-                    onPointerUp={(e) => handleAimPointerUp(cam.id, e)}
-                    title="Drag to aim camera towards street / junction"
-                    style={{
-                      position: 'absolute',
-                      left: `${aimHandleX}px`,
-                      top: `${aimHandleY}px`,
-                      transform: 'translate(-50%, -50%)',
-                      width: '18px',
-                      height: '18px',
-                      borderRadius: '50%',
-                      background: '#f59e0b',
-                      border: '2px solid #ffffff',
-                      boxShadow: '0 0 0 3px rgba(245, 158, 11, 0.4), 0 2px 6px rgba(0,0,0,0.4)',
-                      pointerEvents: 'auto',
-                      cursor: 'crosshair',
-                      zIndex: 106,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center'
-                    }}
-                  >
-                    <div
-                      style={{
-                        width: '4px',
-                        height: '4px',
-                        borderRadius: '50%',
-                        background: '#ffffff'
-                      }}
-                    />
-                  </div>
-                )}
-              </React.Fragment>
-            );
-          })}
-      </div>
+      {/* Interactive Layer for handling map clicks in placement, relocate, or aim mode */}
+      {isSpecialMode && (
+        <div
+          className="cctv-interactive-layer"
+          onClick={handleMapActionClick}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            width: '100vw',
+            height: '100vh',
+            zIndex: 99990,
+            pointerEvents: 'auto',
+            cursor: 'crosshair'
+          }}
+        />
+      )}
 
       {/* Special Mode Interactive Banner */}
       {isSpecialMode && (
@@ -706,36 +864,9 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
         >
           <span>
             {isPlacingCamera && '📍 New Camera Mode: Click anywhere on Earth or Maps to drop camera'}
-            {isRelocatingCamera && `📍 Repositioning ${activeCamera?.name || 'Camera'}: Click on the junction or road`}
+            {isRelocatingCamera && `📍 Move Camera: Click on the target junction or road on Earth to place ${activeCamera?.name || 'Camera'}`}
             {isAimingCamera && `🎯 Aiming ${activeCamera?.name || 'Camera'}: Click down the road to point camera`}
           </span>
-
-          {isRelocatingCamera && (
-            <button
-              type="button"
-              onClick={() => {
-                if (activeCameraId) {
-                  relocateCamera(activeCameraId, {
-                    latitude: mapState.centerLat,
-                    longitude: mapState.centerLon,
-                    elevation: groundAlt
-                  });
-                }
-              }}
-              style={{
-                background: '#0284c7',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '12px',
-                padding: '5px 12px',
-                fontSize: '11px',
-                fontWeight: 700,
-                cursor: 'pointer'
-              }}
-            >
-              Drop at View Center
-            </button>
-          )}
 
           <button
             type="button"

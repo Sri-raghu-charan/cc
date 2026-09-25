@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "tabs"
   ],
   "host_permissions": [
     "*://earth.google.com/*",
@@ -14,13 +15,29 @@
     "*://google.com/earth/*",
     "*://*.google.com/maps/*",
     "*://maps.google.com/*",
-    "*://google.com/maps/*"
+    "*://google.com/maps/*",
+    "https://server.arcgisonline.com/*"
   ],
   "background": {
     "service_worker": "background/service-worker.js",
     "type": "module"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "*://earth.google.com/*",
+        "*://*.google.com/earth/*",
+        "*://google.com/earth/*",
+        "*://*.google.com/maps/*",
+        "*://maps.google.com/*",
+        "*://google.com/maps/*"
+      ],
+      "js": [
+        "content/page-bridge.js"
+      ],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "*://earth.google.com/*",

@@ -22,6 +22,7 @@ class MapUrlWatcher {
   private listeners: Set<ViewStateListener> = new Set();
   private lastHref: string = '';
   private pollInterval: number | null = null;
+  private rafId: number | null = null;
   private currentState: CurrentMapState;
 
   constructor() {
@@ -30,6 +31,18 @@ class MapUrlWatcher {
   }
 
   public getState(): CurrentMapState {
+    return this.currentState;
+  }
+
+  public forceCheck(): CurrentMapState {
+    if (typeof window !== 'undefined') {
+      const currentHref = window.location.href;
+      if (currentHref !== this.lastHref) {
+        this.lastHref = currentHref;
+        this.currentState = this.parseCurrentUrl();
+        this.notify();
+      }
+    }
     return this.currentState;
   }
 
@@ -44,19 +57,26 @@ class MapUrlWatcher {
   private startWatching(): void {
     this.lastHref = typeof window !== 'undefined' ? window.location.href : '';
 
-    const checkUpdate = () => {
+    const checkUpdate = (forcedHref?: string) => {
       if (typeof window === 'undefined') return;
-      const currentHref = window.location.href;
+      const currentHref = forcedHref || window.location.href;
       if (currentHref !== this.lastHref) {
         this.lastHref = currentHref;
-        const newState = this.parseCurrentUrl();
+        const newState = this.parseCurrentUrl(currentHref);
         this.currentState = newState;
         this.notify();
       }
     };
 
     if (typeof window !== 'undefined') {
-      // 1. Hook history.pushState and history.replaceState to capture camera URL updates with zero latency
+      // 1. Hook CustomEvent from main-world page bridge (zero latency on history.replaceState/pushState)
+      window.addEventListener('__cctv_url_change__', (e: Event) => {
+        const customEvt = e as CustomEvent<{ href?: string }>;
+        const href = customEvt.detail?.href || (typeof customEvt.detail === 'string' ? customEvt.detail : undefined);
+        checkUpdate(href);
+      });
+
+      // 2. Hook isolated-world history as secondary layer
       try {
         const originalPushState = history.pushState;
         history.pushState = function (...args) {
@@ -73,17 +93,17 @@ class MapUrlWatcher {
         // Ignored
       }
 
-      window.addEventListener('popstate', checkUpdate);
-      window.addEventListener('hashchange', checkUpdate);
+      window.addEventListener('popstate', () => checkUpdate());
+      window.addEventListener('hashchange', () => checkUpdate());
 
-      // Instant check during user interaction (wheel, pointer drag)
-      window.addEventListener('wheel', checkUpdate, { passive: true });
+      // 3. User interaction triggers (pointermove, wheel, mouseup)
+      window.addEventListener('wheel', () => checkUpdate(), { passive: true });
       window.addEventListener('pointerup', () => {
         checkUpdate();
-        setTimeout(checkUpdate, 10);
-        setTimeout(checkUpdate, 50);
-        setTimeout(checkUpdate, 120);
-        setTimeout(checkUpdate, 300);
+        setTimeout(() => checkUpdate(), 10);
+        setTimeout(() => checkUpdate(), 50);
+        setTimeout(() => checkUpdate(), 120);
+        setTimeout(() => checkUpdate(), 300);
       }, { passive: true });
       window.addEventListener('pointermove', (e) => {
         if (e.buttons > 0) {
@@ -91,8 +111,15 @@ class MapUrlWatcher {
         }
       }, { passive: true });
 
-      // 60 FPS fast interval check as fallback (16ms = ~60 fps)
-      this.pollInterval = window.setInterval(checkUpdate, 16);
+      // 4. Per-frame check before each browser paint (guarantees 0-frame delay during active 3D pans)
+      const rafLoop = () => {
+        checkUpdate();
+        this.rafId = requestAnimationFrame(rafLoop);
+      };
+      this.rafId = requestAnimationFrame(rafLoop);
+
+      // 5. Fast 16ms interval as reliable fallback
+      this.pollInterval = window.setInterval(() => checkUpdate(), 16);
     }
   }
 
@@ -101,10 +128,14 @@ class MapUrlWatcher {
       clearInterval(this.pollInterval);
       this.pollInterval = null;
     }
+    if (this.rafId && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(this.rafId);
+      this.rafId = null;
+    }
   }
 
-  public parseCurrentUrl(): CurrentMapState {
-    if (typeof window === 'undefined') {
+  public parseCurrentUrl(customHref?: string): CurrentMapState {
+    if (typeof window === 'undefined' && !customHref) {
       return {
         platform: 'standalone',
         centerLat: 40.7580,
@@ -113,11 +144,11 @@ class MapUrlWatcher {
       };
     }
 
-    const href = window.location.href;
-    const hostname = window.location.hostname;
+    const href = customHref || (typeof window !== 'undefined' ? window.location.href : '');
+    const hostname = typeof window !== 'undefined' ? window.location.hostname : '';
 
     // 1. Google Earth Web
-    if (hostname.includes('earth.google.com') || window.location.pathname.includes('/earth')) {
+    if (hostname.includes('earth.google.com') || href.includes('earth.google.com') || href.includes('/earth')) {
       // Robust Google Earth URL parsing: @lat,lon followed by comma-separated tags
       // Syntax: @<lat>,<lon>,<alt>a,<dist>d,<fov>y,<heading>h,<tilt>t,<roll>r
       const earthMatch = href.match(/@(-?\d+\.?\d*),(-?\d+\.?\d*)(?:,([^/?#]+))?/);
@@ -126,16 +157,18 @@ class MapUrlWatcher {
         const lon = parseFloat(earthMatch[2]);
         const rest = earthMatch[3] || '';
 
-        // Extract individual letter-tagged tokens
-        const altMatch = rest.match(/(-?\d+\.?\d*)a/);
-        const distMatch = rest.match(/(-?\d+\.?\d*)d/);
-        const fovMatch = rest.match(/(-?\d+\.?\d*)y/);
-        const headingMatch = rest.match(/(-?\d+\.?\d*)h/);
-        const tiltMatch = rest.match(/(-?\d+\.?\d*)t/);
-        const rollMatch = rest.match(/(-?\d+\.?\d*)r/);
+        // Extract individual letter-tagged tokens with optional negative sign and scientific notation
+        const numPattern = '([-+]?\\d*\\.?\\d+(?:[eE][-+]?\\d+)?)';
+        const altMatch = rest.match(new RegExp(`${numPattern}a`));
+        const distMatch = rest.match(new RegExp(`${numPattern}d`));
+        const fovMatch = rest.match(new RegExp(`${numPattern}y`));
+        const headingMatch = rest.match(new RegExp(`${numPattern}h`));
+        const tiltMatch = rest.match(new RegExp(`${numPattern}t`));
+        const rollMatch = rest.match(new RegExp(`${numPattern}r`));
 
         const altitude = altMatch ? parseFloat(altMatch[1]) : 0;
-        const distance = distMatch ? parseFloat(distMatch[1]) : 1000;
+        // If distance is omitted, in 2D nadir view distance equals altitude or default 1000m
+        const distance = distMatch ? parseFloat(distMatch[1]) : (altitude > 0 ? altitude : 1000);
         const fov = fovMatch ? parseFloat(fovMatch[1]) : 35;
         const heading = headingMatch ? parseFloat(headingMatch[1]) : 0;
         const pitch = tiltMatch ? parseFloat(tiltMatch[1]) : 0; // 't' is tilt in Google Earth

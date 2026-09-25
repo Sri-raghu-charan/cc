@@ -55,3 +55,33 @@ chrome.action.onClicked.addListener(async (tab) => {
     chrome.tabs.create({ url: 'https://earth.google.com/web/' });
   }
 });
+
+// Handle message requests from content scripts (e.g. capturing visible Earth tab for camera coverage snapshots)
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === 'CAPTURE_VISIBLE_TAB') {
+    const winId = sender.tab?.windowId;
+    const captureCallback = (dataUrl: string | undefined) => {
+      if (chrome.runtime.lastError || !dataUrl) {
+        console.warn('captureVisibleTab error:', chrome.runtime.lastError?.message);
+        sendResponse({
+          success: false,
+          error: chrome.runtime.lastError?.message || 'Failed to capture visible tab'
+        });
+      } else {
+        sendResponse({ success: true, dataUrl });
+      }
+    };
+
+    try {
+      if (typeof winId === 'number') {
+        (chrome.tabs as any).captureVisibleTab(winId, { format: 'png' }, captureCallback);
+      } else {
+        (chrome.tabs as any).captureVisibleTab({ format: 'png' }, captureCallback);
+      }
+    } catch (err: any) {
+      sendResponse({ success: false, error: err?.message || 'captureVisibleTab error' });
+    }
+    return true; // Keep message channel open for async response
+  }
+});
+

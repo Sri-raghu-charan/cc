@@ -47,6 +47,7 @@ export interface Coordinates {
   latitude: number; // WGS84 degrees
   longitude: number; // WGS84 degrees
   elevation: number; // meters above ground/sea level
+  heading?: number; // Optional viewing azimuth heading in degrees
 }
 
 export interface Camera {
@@ -61,6 +62,7 @@ export interface Camera {
   specs: CameraSpecs;
   visible: boolean;
   color: string; // Hex color for camera footprint / representation
+  isLocked?: boolean; // Strict geo-anchoring: coordinates are immutable unless explicitly in Move mode
 }
 
 export interface DoriDistances {

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   BlindSpotAnalysisResult,
   Camera,
@@ -16,6 +16,7 @@ import { moveCamera, resetCameraToOriginal } from '../geo/movement';
 import { normalizeHeading, computeBearing } from '../geo/coordinates';
 import { analyzeBlindSpots, analyzeOverlaps } from '../geo/analysis';
 import { storage } from '../services/storage';
+import { navigateMapToCoordinates } from '../services/mapNavigator';
 
 export type BaseLayerType = 'satellite' | 'osm' | 'carto_dark' | 'carto_light';
 
@@ -65,11 +66,16 @@ interface CctvContextType {
   undoMovement: (id: string) => void;
   resetToOriginal: (id: string) => void;
   setPlanningPerimeter: (perimeter: PlanningPerimeter | null) => void;
-  exportProjectJson: () => string;
+  exportProjectJson: (snapshotDataUrl?: string) => string;
   exportProjectGeoJson: () => string;
   importProjectJson: (jsonString: string) => boolean;
+  registerSnapshotProvider: (provider: () => Promise<string | null> | string | null) => () => void;
+  captureMapSnapshot: () => Promise<string | null>;
+  saveProjectWithSnapshot: (customName?: string) => Promise<{ json: string; snapshotUrl: string | null }>;
+  lastMapSnapshot: string | null;
   flyToTarget: Coordinates | null;
   setFlyToTarget: (target: Coordinates | null) => void;
+  clearAllCameras: () => void;
 }
 
 export type JunctionPresetType = 'intersection' | 'approach' | 'tJunction' | 'roundabout';
@@ -141,29 +147,6 @@ const DEFAULT_CAMERA_COLORS = [
 ];
 
 export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Pre-populate with one realistic camera at a notable location (e.g. Times Square NYC)
-  const initialCamera: Camera = {
-    id: 'cam-initial-1',
-    name: 'Main Plaza East Bullet',
-    position: {
-      latitude: 40.7580,
-      longitude: -73.9855,
-      elevation: 10
-    },
-    originalPosition: {
-      latitude: 40.7580,
-      longitude: -73.9855,
-      elevation: 10
-    },
-    mountingHeight: 4.5, // 4.5 meters recommended
-    heading: 0, // Facing North
-    tilt: 22, // 22° depression angle
-    rangeMeters: 77, // 77m verified datasheet optical detection reach
-    specs: VERIFIED_CAMERA_MODELS[0], // Hikvision ColorVu Panoramic Turret
-    visible: true,
-    color: DEFAULT_CAMERA_COLORS[0]
-  };
-
   const [cameras, setCameras] = useState<Camera[]>([]);
   const [activeCameraId, setActiveCameraId] = useState<string | null>(null);
   const [isPlacingCamera, setIsPlacingCamera] = useState<boolean>(false);
@@ -171,7 +154,22 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [isAimingCamera, setIsAimingCamera] = useState<boolean>(false);
   const [baseLayer, setBaseLayer] = useState<BaseLayerType>('satellite');
   const [cesiumIonToken, setCesiumIonToken] = useState<string>('');
-  const [flyToTarget, setFlyToTarget] = useState<Coordinates | null>(null);
+  const [flyToTarget, setFlyToTargetState] = useState<Coordinates | null>(null);
+
+  // Unified FlyTo that triggers navigation across Google Earth, Google Maps, and Cesium
+  const setFlyToTarget = useCallback((target: Coordinates | null) => {
+    setFlyToTargetState(target);
+    if (target) {
+      navigateMapToCoordinates(target);
+    }
+  }, []);
+
+  // Clear all pinned cameras and purge from storage
+  const clearAllCameras = useCallback(() => {
+    setCameras([]);
+    setActiveCameraId(null);
+    storage.set('cctv_saved_cameras', []);
+  }, []);
 
   const [doriLayers, setDoriLayers] = useState<DoriLayerVisibility>({
     identification: true,
@@ -185,22 +183,34 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [historyStack, setHistoryStack] = useState<Map<string, MovementHistoryEntry[]>>(new Map());
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
 
-  // Hydrate state from storage on mount
+  // Hydrate state from storage on mount (starts empty, no dummy test cameras)
   useEffect(() => {
     let mounted = true;
     async function loadStoredData() {
       try {
-        const storedCameras = await storage.get<Camera[]>('cctv_saved_cameras', [initialCamera]);
+        const storedCameras = await storage.get<Camera[]>('cctv_saved_cameras', []);
         const storedPerimeter = await storage.get<PlanningPerimeter | null>('cctv_planning_perimeter', null);
         const storedToken = await storage.get<string>('cctv_cesium_ion_token', '');
         
         if (mounted) {
           if (Array.isArray(storedCameras) && storedCameras.length > 0) {
-            setCameras(storedCameras);
-            setActiveCameraId(storedCameras[0].id);
+            // Remove any legacy test dummy camera from storage and enforce strict geo-anchoring
+            const validCameras = storedCameras
+              .filter((c) => c.id !== 'cam-initial-1')
+              .map((c) => ({
+                ...c,
+                isLocked: true,
+                position: {
+                  latitude: Number(c.position.latitude.toFixed(7)),
+                  longitude: Number(c.position.longitude.toFixed(7)),
+                  elevation: c.position.elevation || 0
+                }
+              }));
+            setCameras(validCameras);
+            setActiveCameraId(validCameras.length > 0 ? validCameras[0].id : null);
           } else {
-            setCameras([initialCamera]);
-            setActiveCameraId(initialCamera.id);
+            setCameras([]);
+            setActiveCameraId(null);
           }
           if (storedPerimeter) {
             setPlanningPerimeter(storedPerimeter);
@@ -213,8 +223,8 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch (e) {
         console.warn('Storage hydration error:', e);
         if (mounted) {
-          setCameras([initialCamera]);
-          setActiveCameraId(initialCamera.id);
+          setCameras([]);
+          setActiveCameraId(null);
           setIsHydrated(true);
         }
       }
@@ -312,15 +322,24 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const newCamera: Camera = {
         id: `cam-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
         name: `Camera ${cameras.length + 1} (${cameraSpecs.modelName.split(' ')[0]})`,
-        position: { ...coords },
-        originalPosition: { ...coords },
+        position: {
+          latitude: Number(coords.latitude.toFixed(7)),
+          longitude: Number(coords.longitude.toFixed(7)),
+          elevation: Number((coords.elevation || 0).toFixed(1))
+        },
+        originalPosition: {
+          latitude: Number(coords.latitude.toFixed(7)),
+          longitude: Number(coords.longitude.toFixed(7)),
+          elevation: Number((coords.elevation || 0).toFixed(1))
+        },
         mountingHeight: cameraSpecs.recommendedHeight || 5.0,
         heading: 0,
         tilt: cameraSpecs.recommendedTilt || 25,
         rangeMeters: cameraSpecs.maxOpticalRangeMeters || 45,
         specs: cameraSpecs,
         visible: true,
-        color: DEFAULT_CAMERA_COLORS[colorIndex]
+        color: DEFAULT_CAMERA_COLORS[colorIndex],
+        isLocked: true
       };
 
       setCameras((prev) => [...prev, newCamera]);
@@ -333,10 +352,26 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [cameras]
   );
 
-  // Relocate camera to target coordinates
+  // Relocate camera to target coordinates (Only authorized way to move a placed camera)
   const relocateCamera = useCallback((id: string, coords: Coordinates) => {
+    const lat = Number(coords.latitude.toFixed(7));
+    const lon = Number(coords.longitude.toFixed(7));
+    const elev = Number((coords.elevation || 0).toFixed(1));
+
     setCameras((prev) =>
-      prev.map((c) => (c.id === id ? { ...c, position: { ...coords } } : c))
+      prev.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              position: {
+                latitude: lat,
+                longitude: lon,
+                elevation: elev
+              },
+              isLocked: true
+            }
+          : c
+      )
     );
     setIsRelocatingCamera(false);
   }, []);
@@ -380,12 +415,15 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   }, []);
 
-  // Update camera
+  // Update camera (strict geo-anchoring: position cannot be modified via general updates)
   const updateCamera = useCallback((id: string, updates: Partial<Camera>) => {
     setCameras((prev) =>
       prev.map((c) => {
         if (c.id !== id) return c;
-        return { ...c, ...updates };
+        // Strip out position from general updates to prevent accidental relocation during UI events
+        const safeUpdates = { ...updates };
+        delete safeUpdates.position;
+        return { ...c, ...safeUpdates };
       })
     );
   }, []);
@@ -429,11 +467,11 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   }, []);
 
-  // Step camera by ground distance
+  // Step camera by ground distance (only allowed if camera is explicitly unlocked)
   const stepCamera = useCallback(
     (id: string, direction: MovementDirection, distanceMeters: number) => {
       const targetCam = cameras.find((c) => c.id === id);
-      if (!targetCam) return;
+      if (!targetCam || targetCam.isLocked) return;
 
       const { newPosition, entry } = moveCamera(targetCam, direction, distanceMeters);
 
@@ -460,11 +498,14 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     );
   }, []);
 
-  // Undo movement
+  // Undo movement (only if camera is unlocked)
   const undoMovement = useCallback((id: string) => {
     setHistoryStack((prev) => {
       const history = prev.get(id);
       if (!history || history.length === 0) return prev;
+
+      const targetCam = cameras.find((c) => c.id === id);
+      if (targetCam?.isLocked) return prev;
 
       const lastEntry = history[history.length - 1];
       const newHistory = history.slice(0, -1);
@@ -484,13 +525,13 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
       copy.set(id, newHistory);
       return copy;
     });
-  }, []);
+  }, [cameras]);
 
-  // Reset to original position
+  // Reset to original position (only if camera is unlocked)
   const resetToOriginal = useCallback(
     (id: string) => {
       const targetCam = cameras.find((c) => c.id === id);
-      if (!targetCam) return;
+      if (!targetCam || targetCam.isLocked) return;
 
       const originalCoords = resetCameraToOriginal(targetCam);
 
@@ -508,16 +549,82 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [cameras]
   );
 
-  // Project Export as JSON
-  const exportProjectJson = useCallback(() => {
-    const data = {
-      version: '1.0.0',
+  const snapshotProviderRef = useRef<(() => Promise<string | null> | string | null) | null>(null);
+  const [lastMapSnapshot, setLastMapSnapshot] = useState<string | null>(null);
+
+  const registerSnapshotProvider = useCallback((provider: () => Promise<string | null> | string | null) => {
+    snapshotProviderRef.current = provider;
+    return () => {
+      if (snapshotProviderRef.current === provider) {
+        snapshotProviderRef.current = null;
+      }
+    };
+  }, []);
+
+  const captureMapSnapshot = useCallback(async (): Promise<string | null> => {
+    if (!snapshotProviderRef.current) return null;
+    try {
+      const snap = await snapshotProviderRef.current();
+      if (snap) {
+        setLastMapSnapshot(snap);
+      }
+      return snap;
+    } catch (err) {
+      console.warn('Map snapshot capture failed:', err);
+      return null;
+    }
+  }, []);
+
+  // Save Project with Map Snapshot (saves JSON configuration and downloads PNG map snapshot)
+  const saveProjectWithSnapshot = useCallback(async (customName?: string) => {
+    const snap = await captureMapSnapshot();
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const projName = customName || `cctv_plan_${dateStr}`;
+
+    const projectData = {
+      version: '1.2.0',
       exportedAt: new Date().toISOString(),
+      projectName: projName,
+      totalCameras: cameras.length,
+      mapSnapshot: snap,
+      cameras,
+      planningPerimeter
+    };
+
+    const jsonStr = JSON.stringify(projectData, null, 2);
+
+    // 1. Download Project JSON (with embedded snapshot)
+    const jsonBlob = new Blob([jsonStr], { type: 'application/json' });
+    const jsonUrl = URL.createObjectURL(jsonBlob);
+    const jsonLink = document.createElement('a');
+    jsonLink.href = jsonUrl;
+    jsonLink.download = `${projName}.json`;
+    jsonLink.click();
+    URL.revokeObjectURL(jsonUrl);
+
+    // 2. Download Standalone High-Resolution Map Snapshot Image (PNG)
+    if (snap) {
+      const imgLink = document.createElement('a');
+      imgLink.href = snap;
+      imgLink.download = `${projName}_map_snapshot.png`;
+      imgLink.click();
+    }
+
+    return { json: jsonStr, snapshotUrl: snap };
+  }, [captureMapSnapshot, cameras, planningPerimeter]);
+
+  // Project Export as JSON
+  const exportProjectJson = useCallback((snapshotDataUrl?: string) => {
+    const data = {
+      version: '1.2.0',
+      exportedAt: new Date().toISOString(),
+      totalCameras: cameras.length,
+      mapSnapshot: snapshotDataUrl || lastMapSnapshot || null,
       cameras,
       planningPerimeter
     };
     return JSON.stringify(data, null, 2);
-  }, [cameras, planningPerimeter]);
+  }, [cameras, planningPerimeter, lastMapSnapshot]);
 
   // Project Export as GeoJSON
   const exportProjectGeoJson = useCallback(() => {
@@ -590,6 +697,9 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (data.planningPerimeter) {
         setPlanningPerimeter(data.planningPerimeter);
       }
+      if (data.mapSnapshot) {
+        setLastMapSnapshot(data.mapSnapshot);
+      }
       return true;
     } catch (err) {
       console.error('Failed to import project JSON:', err);
@@ -638,8 +748,13 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
         exportProjectJson,
         exportProjectGeoJson,
         importProjectJson,
+        registerSnapshotProvider,
+        captureMapSnapshot,
+        saveProjectWithSnapshot,
+        lastMapSnapshot,
         flyToTarget,
-        setFlyToTarget
+        setFlyToTarget,
+        clearAllCameras
       }}
     >
       {children}

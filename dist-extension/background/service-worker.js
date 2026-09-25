@@ -28,5 +28,26 @@ chrome.runtime.onInstalled.addListener(async (e) => {
 		await chrome.tabs.sendMessage(e.id, { type: "TOGGLE_OVERLAY" });
 	} catch {}
 	else chrome.tabs.create({ url: "https://earth.google.com/web/" });
+}), chrome.runtime.onMessage.addListener((e, t, n) => {
+	if (e?.type === "CAPTURE_VISIBLE_TAB") {
+		let e = t.tab?.windowId, r = (e) => {
+			chrome.runtime.lastError || !e ? (console.warn("captureVisibleTab error:", chrome.runtime.lastError?.message), n({
+				success: !1,
+				error: chrome.runtime.lastError?.message || "Failed to capture visible tab"
+			})) : n({
+				success: !0,
+				dataUrl: e
+			});
+		};
+		try {
+			typeof e == "number" ? chrome.tabs.captureVisibleTab(e, { format: "png" }, r) : chrome.tabs.captureVisibleTab({ format: "png" }, r);
+		} catch (e) {
+			n({
+				success: !1,
+				error: e?.message || "captureVisibleTab error"
+			});
+		}
+		return !0;
+	}
 });
 //#endregion

@@ -3,6 +3,7 @@ import * as Cesium from 'cesium';
 import { useCctv } from '../../context/CctvContext';
 import { DORI_COLORS } from '../../geo/dori';
 import { getCameraIconUri } from '../../utils/cameraIcons';
+import { renderCameraCoverageSnapshot } from '../../utils/satelliteMapCapture';
 import { Navigation, ZoomIn, ZoomOut, Compass as CompassIcon, RotateCcw, Globe2 } from 'lucide-react';
 
 const BASE_LAYER_URLS = {
@@ -50,7 +51,8 @@ export const CesiumMap: React.FC = () => {
     baseLayer,
     cesiumIonToken,
     flyToTarget,
-    setFlyToTarget
+    setFlyToTarget,
+    registerSnapshotProvider
   } = useCctv();
 
   const [isViewerReady, setIsViewerReady] = useState<boolean>(false);
@@ -108,7 +110,8 @@ export const CesiumMap: React.FC = () => {
             depth: true,
             stencil: false,
             antialias: false,
-            powerPreference: 'high-performance'
+            powerPreference: 'high-performance',
+            preserveDrawingBuffer: true
           }
         },
         requestRenderMode: true,
@@ -201,6 +204,130 @@ export const CesiumMap: React.FC = () => {
     setFlyToTarget(null);
   }, [flyToTarget, setFlyToTarget]);
 
+  // Register Map Snapshot Provider for saving project with map snapshot of the covered camera region
+  useEffect(() => {
+    return registerSnapshotProvider(async () => {
+      const viewer = viewerRef.current;
+      if (!viewer || viewer.isDestroyed()) return null;
+
+      try {
+        viewer.render();
+        const mainCanvas = viewer.scene.canvas;
+
+        // 1. Determine target camera(s) to frame
+        const targetCams = cameras.filter((c) => c.visible && (activeCameraId ? c.id === activeCameraId : true));
+        if (targetCams.length === 0 && cameras.length > 0) {
+          const visible = cameras.filter((c) => c.visible);
+          targetCams.push(...(visible.length > 0 ? visible : [cameras[0]]));
+        }
+
+        // 2. Collect 2D window coordinates of camera and its covered footprint
+        const screenPoints: { x: number; y: number }[] = [];
+        targetCams.forEach((cam) => {
+          const gPos = Cesium.Cartesian3.fromDegrees(cam.position.longitude, cam.position.latitude, 0);
+          const gScr = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, gPos);
+          if (gScr) screenPoints.push({ x: gScr.x, y: gScr.y });
+
+          const lPos = Cesium.Cartesian3.fromDegrees(cam.position.longitude, cam.position.latitude, cam.mountingHeight);
+          const lScr = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, lPos);
+          if (lScr) screenPoints.push({ x: lScr.x, y: lScr.y });
+
+          const fp = footprints.get(cam.id);
+          if (fp && fp.coordinates) {
+            fp.coordinates.forEach((coord) => {
+              const cPos = Cesium.Cartesian3.fromDegrees(coord.longitude, coord.latitude, 0);
+              const cScr = Cesium.SceneTransforms.worldToWindowCoordinates(viewer.scene, cPos);
+              if (cScr) screenPoints.push({ x: cScr.x, y: cScr.y });
+            });
+          }
+        });
+
+        const width = mainCanvas.width;
+        const height = mainCanvas.height;
+
+        let cropX = 0;
+        let cropY = 0;
+        let cropW = width;
+        let cropH = height;
+
+        if (screenPoints.length >= 2) {
+          let minX = Infinity;
+          let maxX = -Infinity;
+          let minY = Infinity;
+          let maxY = -Infinity;
+
+          screenPoints.forEach((p) => {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+          });
+
+          const boxW = Math.max(10, maxX - minX);
+          const boxH = Math.max(10, maxY - minY);
+
+          const padX = Math.max(80, boxW * 0.35);
+          const padY = Math.max(80, boxH * 0.35);
+
+          cropX = Math.max(0, Math.floor(minX - padX));
+          cropY = Math.max(0, Math.floor(minY - padY));
+          cropW = Math.min(width - cropX, Math.ceil(boxW + padX * 2));
+          cropH = Math.min(height - cropY, Math.ceil(boxH + padY * 2));
+
+          if (cropW < 400) {
+            const diff = 400 - cropW;
+            cropX = Math.max(0, cropX - diff / 2);
+            cropW = Math.min(width - cropX, 400);
+          }
+          if (cropH < 300) {
+            const diff = 300 - cropH;
+            cropY = Math.max(0, cropY - diff / 2);
+            cropH = Math.min(height - cropY, 300);
+          }
+        }
+
+        const camToStamp = targetCams[0];
+        if (!camToStamp) return mainCanvas.toDataURL('image/png');
+        const fp = footprints.get(camToStamp.id);
+
+        let cesiumImage: HTMLImageElement | null = null;
+        try {
+          const dataUrl = mainCanvas.toDataURL('image/png');
+          cesiumImage = await new Promise<HTMLImageElement | null>((res) => {
+            const img = new Image();
+            img.onload = () => res(img);
+            img.onerror = () => res(null);
+            img.src = dataUrl;
+          });
+        } catch {
+          // ignore
+        }
+
+        return await renderCameraCoverageSnapshot({
+          camera: camToStamp,
+          footprint: fp,
+          doriLayers,
+          capturedScreenImage: cesiumImage,
+          capturedScreenCrop: {
+            cropX,
+            cropY,
+            cropW,
+            cropH,
+            totalW: width,
+            totalH: height
+          },
+          overlayCanvas: null,
+          dpr: 1,
+          targetWidth: Math.max(900, cropW),
+          targetHeight: Math.max(600, cropH)
+        });
+      } catch (err) {
+        console.warn('Cesium map snapshot capture error:', err);
+        return null;
+      }
+    });
+  }, [registerSnapshotProvider, isViewerReady, cameras, activeCameraId, footprints, doriLayers]);
+
   // Map Click Interactions (Placement & Selection)
   useEffect(() => {
     const viewer = viewerRef.current;
@@ -224,26 +351,42 @@ export const CesiumMap: React.FC = () => {
           const lon = Cesium.Math.toDegrees(cartographic.longitude);
           const elev = cartographic.height || 0;
 
-          addCameraAtCoordinates({
+          const newCam = addCameraAtCoordinates({
             latitude: Number(lat.toFixed(7)),
             longitude: Number(lon.toFixed(7)),
             elevation: Number(elev.toFixed(1))
           });
+          selectCamera(newCam.id);
+          setIsPlacingCamera(false);
         }
         return;
       }
 
-      // 2. Otherwise: Check if a camera icon was clicked to select
+      // 2. Otherwise: Check if a camera icon was clicked to select & fly to pinned location
       const picked = viewer.scene.pick(click.position);
       if (picked && picked.id) {
         const entityId = picked.id.id || picked.id;
         const matchedCamera = cameras.find(
           (c) =>
             entityId === c.id ||
-            entityId === `${c.id}-marker`
+            entityId === `${c.id}-marker` ||
+            entityId === `${c.id}-label` ||
+            entityId === `${c.id}-pole` ||
+            entityId === `${c.id}-heading-arrow` ||
+            entityId === `${c.id}-footprint` ||
+            (typeof entityId === 'string' && entityId.startsWith(c.id))
         );
         if (matchedCamera) {
           selectCamera(matchedCamera.id);
+          // Tap on camera to go directly to the camera location it pinned!
+          viewer.camera.flyTo({
+            destination: Cesium.Cartesian3.fromDegrees(
+              matchedCamera.position.longitude,
+              matchedCamera.position.latitude,
+              Math.max(160, (matchedCamera.position.elevation || 0) + 180)
+            ),
+            duration: 1.0
+          });
         }
       }
     }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
@@ -270,18 +413,48 @@ export const CesiumMap: React.FC = () => {
       if (!camera.visible) return;
 
       const isSelected = camera.id === activeCameraId;
-      const lensPos = Cesium.Cartesian3.fromDegrees(
-        camera.position.longitude,
-        camera.position.latitude,
-        camera.position.elevation + camera.mountingHeight
-      );
       const groundPos = Cesium.Cartesian3.fromDegrees(
         camera.position.longitude,
         camera.position.latitude,
-        camera.position.elevation
+        0
+      );
+      const lensPos = Cesium.Cartesian3.fromDegrees(
+        camera.position.longitude,
+        camera.position.latitude,
+        camera.mountingHeight
       );
 
-      // Vertical Camera Mounting Pole
+      // Camera Marker Icon & Label (Real camera icon clamped to ground at markup point)
+      const formFactor = camera.specs?.formFactor || 'bullet';
+      viewer.entities.add({
+        id: `${camera.id}-marker`,
+        position: groundPos,
+        billboard: {
+          image: getCameraIconUri(formFactor, camera.color, isSelected),
+          width: isSelected ? 46 : 38,
+          height: isSelected ? 54 : 44,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          scaleByDistance: new Cesium.NearFarScalar(100, 1.0, 5000, 0.6)
+        },
+        label: {
+          text: `${camera.name} [${formFactor.toUpperCase()}]`,
+          font: isSelected ? 'bold 12px sans-serif' : '11px sans-serif',
+          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+          fillColor: isSelected ? Cesium.Color.fromCssColorString('#38bdf8') : Cesium.Color.WHITE,
+          outlineColor: Cesium.Color.BLACK,
+          outlineWidth: 2,
+          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+          pixelOffset: new Cesium.Cartesian2(0, isSelected ? -58 : -48),
+          heightReference: Cesium.HeightReference.CLAMP_TO_GROUND,
+          disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          scaleByDistance: new Cesium.NearFarScalar(100, 1.0, 4000, 0.6)
+        }
+      });
+
+      // 3. Vertical Camera Mounting Pole from ground markup point up to lens
       viewer.entities.add({
         id: `${camera.id}-pole`,
         polyline: {
@@ -291,46 +464,20 @@ export const CesiumMap: React.FC = () => {
         }
       });
 
-      // Camera Lens Marker / Icon (Type-Specific Camera Icon Billboard)
-      const formFactor = camera.specs?.formFactor || 'bullet';
-      viewer.entities.add({
-        id: `${camera.id}-marker`,
-        position: lensPos,
-        billboard: {
-          image: getCameraIconUri(formFactor, camera.color, isSelected),
-          width: isSelected ? 42 : 34,
-          height: isSelected ? 48 : 38,
-          verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-          horizontalOrigin: Cesium.HorizontalOrigin.CENTER,
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          scaleByDistance: new Cesium.NearFarScalar(100, 1.0, 5000, 0.5)
-        },
-        label: {
-          text: `${camera.name} [${formFactor.toUpperCase()}]`,
-          font: isSelected ? 'bold 12px sans-serif' : '11px sans-serif',
-          style: Cesium.LabelStyle.FILL_AND_OUTLINE,
-          fillColor: isSelected ? Cesium.Color.fromCssColorString('#38bdf8') : Cesium.Color.WHITE,
-          outlineColor: Cesium.Color.BLACK,
-          outlineWidth: 2,
-          pixelOffset: new Cesium.Cartesian2(0, isSelected ? -52 : -42),
-          disableDepthTestDistance: Number.POSITIVE_INFINITY,
-          scaleByDistance: new Cesium.NearFarScalar(100, 1.0, 4000, 0.5)
-        }
-      });
-
-      // Direction Indicator Arrow along heading
+      // 4. Direction Indicator Arrow clamped along ground heading
       const arrowHeadingRad = Cesium.Math.toRadians(camera.heading);
       const arrowLength = 5.0; // 5 meters long
-      const arrowEnd = Cesium.Cartesian3.fromDegrees(
+      const arrowEndGround = Cesium.Cartesian3.fromDegrees(
         camera.position.longitude + (arrowLength * Math.sin(arrowHeadingRad)) / 111320,
         camera.position.latitude + (arrowLength * Math.cos(arrowHeadingRad)) / 110540,
-        camera.position.elevation + camera.mountingHeight
+        0
       );
       viewer.entities.add({
         id: `${camera.id}-heading-arrow`,
         polyline: {
-          positions: [lensPos, arrowEnd],
+          positions: [groundPos, arrowEndGround],
           width: 3,
+          clampToGround: true,
           material: new Cesium.PolylineArrowMaterialProperty(
             Cesium.Color.fromCssColorString(camera.color)
           )
@@ -367,7 +514,7 @@ export const CesiumMap: React.FC = () => {
           cornerIndices.forEach((idx, i) => {
             const corner = fp.coordinates[idx];
             if (corner) {
-              const groundVertex = Cesium.Cartesian3.fromDegrees(corner.longitude, corner.latitude, camera.position.elevation);
+              const groundVertex = Cesium.Cartesian3.fromDegrees(corner.longitude, corner.latitude, 0);
               viewer.entities.add({
                 id: `${camera.id}-sightline-${i}`,
                 polyline: {
