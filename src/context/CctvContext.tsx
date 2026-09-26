@@ -17,6 +17,7 @@ import { normalizeHeading, computeBearing } from '../geo/coordinates';
 import { analyzeBlindSpots, analyzeOverlaps } from '../geo/analysis';
 import { storage } from '../services/storage';
 import { navigateMapToCoordinates } from '../services/mapNavigator';
+import { ParsedCamera } from '../utils/projectFileParser';
 
 export type BaseLayerType = 'satellite' | 'osm' | 'carto_dark' | 'carto_light';
 
@@ -54,6 +55,8 @@ interface CctvContextType {
   setDoriLayers: React.Dispatch<React.SetStateAction<DoriLayerVisibility>>;
   selectCamera: (id: string | null) => void;
   addCameraAtCoordinates: (coords: Coordinates, specs?: any) => Camera;
+  addCamerasBatch: (camerasData: ParsedCamera[]) => Camera[];
+
   relocateCamera: (id: string, coords: Coordinates) => void;
   aimCameraAt: (id: string, targetCoords: Coordinates) => void;
   applyJunctionPreset: (id: string, presetName: JunctionPresetType) => void;
@@ -313,15 +316,41 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setActiveCameraId(id);
   }, []);
 
-  // Add camera
+  // Add camera (Strictly Approach Lane ratio: 60° HFOV, 34° VFOV, 45m range, 18° tilt, 6m ht)
   const addCameraAtCoordinates = useCallback(
     (coords: Coordinates, specs?: any): Camera => {
       const colorIndex = cameras.length % DEFAULT_CAMERA_COLORS.length;
-      const cameraSpecs = specs || VERIFIED_CAMERA_MODELS[0];
+
+      // All cameras strictly default to the Approach Lane Tracking standard (45m range, 18° tilt, 6m ht, 60° HFOV, 34° VFOV)
+      const approachPreset = JUNCTION_PRESETS.approach;
+      const baseSpecs = {
+        ...VERIFIED_CAMERA_MODELS[0],
+        selectedHfov: approachPreset.hfov, // 60.0°
+        selectedVfov: approachPreset.vfov, // 34.0°
+        maxOpticalRangeMeters: approachPreset.rangeMeters, // 45m
+        recommendedHeight: approachPreset.mountingHeight, // 6.0m
+        recommendedTilt: approachPreset.tilt // 18°
+      };
+
+      const cameraSpecs = specs
+        ? {
+            ...baseSpecs,
+            ...specs,
+            selectedHfov: specs.selectedHfov ?? approachPreset.hfov,
+            selectedVfov: specs.selectedVfov ?? approachPreset.vfov,
+            maxOpticalRangeMeters: specs.maxOpticalRangeMeters ?? approachPreset.rangeMeters,
+            recommendedHeight: specs.recommendedHeight ?? approachPreset.mountingHeight,
+            recommendedTilt: specs.recommendedTilt ?? approachPreset.tilt
+          }
+        : baseSpecs;
+
+      const mountingHeight = cameraSpecs.recommendedHeight || approachPreset.mountingHeight;
+      const tilt = cameraSpecs.recommendedTilt || approachPreset.tilt;
+      const rangeMeters = cameraSpecs.maxOpticalRangeMeters || approachPreset.rangeMeters;
 
       const newCamera: Camera = {
         id: `cam-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
-        name: `Camera ${cameras.length + 1} (${cameraSpecs.modelName.split(' ')[0]})`,
+        name: `Camera ${cameras.length + 1}`,
         position: {
           latitude: Number(coords.latitude.toFixed(7)),
           longitude: Number(coords.longitude.toFixed(7)),
@@ -332,10 +361,10 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
           longitude: Number(coords.longitude.toFixed(7)),
           elevation: Number((coords.elevation || 0).toFixed(1))
         },
-        mountingHeight: cameraSpecs.recommendedHeight || 5.0,
+        mountingHeight,
         heading: 0,
-        tilt: cameraSpecs.recommendedTilt || 25,
-        rangeMeters: cameraSpecs.maxOpticalRangeMeters || 45,
+        tilt,
+        rangeMeters,
         specs: cameraSpecs,
         visible: true,
         color: DEFAULT_CAMERA_COLORS[colorIndex],
@@ -351,6 +380,89 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     },
     [cameras]
   );
+
+  // Batch add multiple cameras from imported project files and strictly anchor to WGS84 coordinates
+  const addCamerasBatch = useCallback(
+    (camerasData: ParsedCamera[]): Camera[] => {
+      if (!camerasData || camerasData.length === 0) return [];
+
+      // All imported cameras strictly default to Approach Lane specifications (45m range, 18° tilt, 6m ht, 60° HFOV, 34° VFOV)
+      const approachPreset = JUNCTION_PRESETS.approach;
+      const baseSpecs = {
+        ...VERIFIED_CAMERA_MODELS[0],
+        selectedHfov: approachPreset.hfov, // 60.0°
+        selectedVfov: approachPreset.vfov, // 34.0°
+        maxOpticalRangeMeters: approachPreset.rangeMeters, // 45m
+        recommendedHeight: approachPreset.mountingHeight, // 6.0m
+        recommendedTilt: approachPreset.tilt // 18°
+      };
+
+      const newCameras: Camera[] = camerasData.map((data, idx) => {
+        const colorIndex = (cameras.length + idx) % DEFAULT_CAMERA_COLORS.length;
+        const spec = {
+          ...baseSpecs,
+          ...(data.specs || {}),
+          selectedHfov: data.specs?.selectedHfov ?? approachPreset.hfov,
+          selectedVfov: data.specs?.selectedVfov ?? approachPreset.vfov,
+          maxOpticalRangeMeters: data.specs?.maxOpticalRangeMeters ?? approachPreset.rangeMeters,
+          recommendedHeight: data.specs?.recommendedHeight ?? approachPreset.mountingHeight,
+          recommendedTilt: data.specs?.recommendedTilt ?? approachPreset.tilt
+        };
+
+        // When uploading the project plan, use the exact camera name provided in the file
+        const cameraName = data.name && data.name.trim().length > 0
+          ? data.name.trim()
+          : `Camera ${cameras.length + idx + 1}`;
+
+        return {
+          id: `cam-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}-${idx}`,
+          name: cameraName,
+          position: {
+            latitude: Number(data.latitude.toFixed(7)),
+            longitude: Number(data.longitude.toFixed(7)),
+            elevation: Number((data.elevation || 0).toFixed(1))
+          },
+          originalPosition: {
+            latitude: Number(data.latitude.toFixed(7)),
+            longitude: Number(data.longitude.toFixed(7)),
+            elevation: Number((data.elevation || 0).toFixed(1))
+          },
+          mountingHeight:
+            typeof data.mountingHeight === 'number' && data.mountingHeight > 0
+              ? data.mountingHeight
+              : approachPreset.mountingHeight,
+          heading: typeof data.heading === 'number' ? data.heading : 0,
+          tilt: typeof data.tilt === 'number' ? data.tilt : approachPreset.tilt,
+          rangeMeters:
+            typeof data.rangeMeters === 'number' && data.rangeMeters > 0
+              ? data.rangeMeters
+              : approachPreset.rangeMeters,
+          specs: spec,
+          visible: true,
+          color: DEFAULT_CAMERA_COLORS[colorIndex],
+          isLocked: true // Strict Real-World WGS84 Anchor
+        };
+      });
+
+      setCameras((prev) => [...prev, ...newCameras]);
+      if (newCameras.length > 0) {
+        setActiveCameraId(newCameras[0].id);
+        // Automatically fly/navigate Google Earth to the first imported camera
+        setFlyToTarget({
+          latitude: newCameras[0].position.latitude,
+          longitude: newCameras[0].position.longitude,
+          elevation: newCameras[0].position.elevation
+        });
+      }
+      setIsPlacingCamera(false);
+      setIsRelocatingCamera(false);
+      setIsAimingCamera(false);
+      return newCameras;
+    },
+    [cameras, setFlyToTarget]
+  );
+
+
 
   // Relocate camera to target coordinates (Only authorized way to move a placed camera)
   const relocateCamera = useCallback((id: string, coords: Coordinates) => {
@@ -733,6 +845,7 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setDoriLayers,
         selectCamera,
         addCameraAtCoordinates,
+        addCamerasBatch,
         relocateCamera,
         aimCameraAt,
         applyJunctionPreset,

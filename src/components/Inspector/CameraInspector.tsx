@@ -3,7 +3,7 @@ import { Camera, CameraSpecs } from '../../types/camera';
 import { VERIFIED_CAMERA_MODELS, createCustomCameraSpecs } from '../../data/cameraModels';
 import { CircularCompass } from '../Compass/CircularCompass';
 import { GroundMovementControls } from '../Movement/GroundMovementControls';
-import { useCctv, JUNCTION_PRESETS, JunctionPresetType } from '../../context/CctvContext';
+import { useCctv } from '../../context/CctvContext';
 import { calculateDoriDistances } from '../../geo/dori';
 import {
   ShieldCheck,
@@ -38,7 +38,6 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
     setIsRelocatingCamera,
     isAimingCamera,
     setIsAimingCamera,
-    applyJunctionPreset,
     setFlyToTarget,
     captureMapSnapshot,
     saveProjectWithSnapshot,
@@ -191,17 +190,9 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
       >
         <button
           type="button"
-          className="btn btn-secondary"
-          onClick={() => document.getElementById('sec-junction')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
-          style={{ fontSize: '10px', padding: '4px 8px', borderRadius: '12px', whiteSpace: 'nowrap', background: '#0284c7', color: '#fff' }}
-        >
-          🚦 Junction
-        </button>
-        <button
-          type="button"
-          className="btn btn-secondary"
+          className="btn btn-primary"
           onClick={() => document.getElementById('sec-identity')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
-          style={{ fontSize: '10px', padding: '4px 8px', borderRadius: '12px', whiteSpace: 'nowrap' }}
+          style={{ fontSize: '10px', padding: '4px 8px', borderRadius: '12px', whiteSpace: 'nowrap', background: '#0284c7', color: '#fff' }}
         >
           Identity
         </button>
@@ -215,9 +206,9 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
         </button>
         <button
           type="button"
-          className="btn btn-primary"
+          className="btn btn-secondary"
           onClick={() => document.getElementById('sec-compass')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })}
-          style={{ fontSize: '10px', padding: '4px 8px', borderRadius: '12px', whiteSpace: 'nowrap', background: 'linear-gradient(135deg, #0284c7, #2563eb)' }}
+          style={{ fontSize: '10px', padding: '4px 8px', borderRadius: '12px', whiteSpace: 'nowrap' }}
         >
           🧭 Compass
         </button>
@@ -254,128 +245,55 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
         </button>
       </div>
 
-      {/* Junction Placement & Real-Life Presets Card */}
-      <div id="sec-junction" className="card-section" style={{ border: '1px solid rgba(56, 189, 248, 0.4)', background: 'linear-gradient(180deg, rgba(15, 23, 42, 0.9) 0%, rgba(30, 41, 59, 0.7) 100%)' }}>
-        <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <MapPin size={13} /> Junction Setup & Positioning
-          </span>
-          <span style={{ fontSize: '10px', background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', padding: '2px 6px', borderRadius: '8px', fontWeight: 600 }}>
-            Real-Life Presets
-          </span>
-        </div>
-
-        {/* Repositioning & Aiming Quick Actions */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginTop: '4px' }}>
-          <button
-            type="button"
-            onClick={() => {
-              setIsRelocatingCamera(!isRelocatingCamera);
-              setIsAimingCamera(false);
-            }}
-            style={{
-              padding: '6px 4px',
-              fontSize: '10px',
-              fontWeight: 600,
-              borderRadius: '8px',
-              border: isRelocatingCamera ? '1px solid #38bdf8' : '1px solid rgba(255,255,255,0.15)',
-              background: isRelocatingCamera ? 'rgba(56, 189, 248, 0.3)' : 'rgba(30, 41, 59, 0.8)',
-              color: isRelocatingCamera ? '#38bdf8' : '#ffffff',
-              cursor: 'pointer',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '3px'
-            }}
-            title="Enter Move Camera mode to place camera at a new location on the map"
-          >
-            <MapPin size={13} />
-            {isRelocatingCamera ? 'Click to Move' : 'Move Camera'}
-          </button>
-
-          <button
-            type="button"
-            onClick={() => {
-              setIsAimingCamera(!isAimingCamera);
-              setIsRelocatingCamera(false);
-            }}
-            style={{
-              padding: '6px 4px',
-              fontSize: '10px',
-              fontWeight: 600,
-              borderRadius: '8px',
-              border: isAimingCamera ? '1px solid #f59e0b' : '1px solid rgba(255,255,255,0.15)',
-              background: isAimingCamera ? 'rgba(245, 158, 11, 0.3)' : 'rgba(30, 41, 59, 0.8)',
-              color: isAimingCamera ? '#f59e0b' : '#ffffff',
-              cursor: 'pointer',
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: '3px'
-            }}
-            title="Click down the street to aim camera heading"
-          >
-            <Crosshair size={13} />
-            {isAimingCamera ? 'Click Road...' : 'Aim At'}
-          </button>
-        </div>
-
-        {/* Real-Life Junction Presets Grid */}
-        <div style={{ marginTop: '10px' }}>
-          <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '6px' }}>
-            One-Click Real-Life Junction Presets:
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '6px' }}>
-            {(Object.keys(JUNCTION_PRESETS) as JunctionPresetType[]).map((key) => {
-              const p = JUNCTION_PRESETS[key];
-              const isMatch =
-                camera.rangeMeters === p.rangeMeters &&
-                camera.mountingHeight === p.mountingHeight &&
-                camera.tilt === p.tilt;
-
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => applyJunctionPreset(camera.id, key)}
-                  style={{
-                    padding: '8px',
-                    borderRadius: '8px',
-                    border: isMatch ? '1px solid #10b981' : '1px solid var(--border-subtle)',
-                    background: isMatch ? 'rgba(16, 185, 129, 0.2)' : 'rgba(15, 23, 42, 0.6)',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '2px',
-                    transition: 'all 0.15s ease'
-                  }}
-                >
-                  <div style={{ fontSize: '11px', fontWeight: 700, color: isMatch ? '#10b981' : '#fff', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <span>{p.label}</span>
-                    {isMatch && <Check size={11} style={{ color: '#10b981' }} />}
-                  </div>
-                  <div style={{ fontSize: '9px', color: 'var(--text-muted)', lineHeight: 1.2 }}>
-                    {p.rangeMeters}m range • {p.tilt}° tilt • {p.mountingHeight}m ht
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Real-world Installer Guidelines */}
-        <div style={{ marginTop: '8px', background: 'rgba(2, 132, 199, 0.1)', border: '1px solid rgba(2, 132, 199, 0.25)', borderRadius: '6px', padding: '6px 8px', fontSize: '10px', color: '#bae6fd', lineHeight: 1.4 }}>
-          💡 <strong>Tip for Junctions:</strong> Drag the camera badge directly on the map to place it at the pole/corner, and drag the yellow bead to point down the street. Use 20°-30° tilt to monitor vehicles and pedestrians without sky glare.
-        </div>
-      </div>
-
       {/* General Identification */}
       <div id="sec-identity" className="card-section">
-        <div className="card-title">
+        <div className="card-title" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <span>Camera Identity</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setIsRelocatingCamera(!isRelocatingCamera);
+                setIsAimingCamera(false);
+              }}
+              style={{
+                fontSize: '11px',
+                padding: '3px 8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                border: isRelocatingCamera ? '1px solid #38bdf8' : undefined,
+                background: isRelocatingCamera ? 'rgba(56, 189, 248, 0.3)' : undefined,
+                color: isRelocatingCamera ? '#38bdf8' : undefined
+              }}
+              title="Click to relocate camera on map"
+            >
+              <MapPin size={12} />
+              {isRelocatingCamera ? 'Moving...' : 'Move'}
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                setIsAimingCamera(!isAimingCamera);
+                setIsRelocatingCamera(false);
+              }}
+              style={{
+                fontSize: '11px',
+                padding: '3px 8px',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                border: isAimingCamera ? '1px solid #f59e0b' : undefined,
+                background: isAimingCamera ? 'rgba(245, 158, 11, 0.3)' : undefined,
+                color: isAimingCamera ? '#f59e0b' : undefined
+              }}
+              title="Click down the street to aim camera heading"
+            >
+              <Crosshair size={12} />
+              {isAimingCamera ? 'Aiming...' : 'Aim'}
+            </button>
             <button
               type="button"
               className="btn btn-secondary"

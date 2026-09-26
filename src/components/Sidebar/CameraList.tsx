@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { useCctv } from '../../context/CctvContext';
+import { parseProjectFile } from '../../utils/projectFileParser';
 import {
   Video,
   Plus,
@@ -26,6 +27,7 @@ export const CameraList: React.FC = () => {
     toggleCameraVisibility,
     setIsPlacingCamera,
     setFlyToTarget,
+    addCamerasBatch,
     exportProjectJson,
     exportProjectGeoJson,
     importProjectJson,
@@ -34,6 +36,7 @@ export const CameraList: React.FC = () => {
     lastMapSnapshot,
     clearAllCameras
   } = useCctv();
+
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isSavingSnapshot, setIsSavingSnapshot] = useState<boolean>(false);
@@ -97,25 +100,38 @@ export const CameraList: React.FC = () => {
     URL.revokeObjectURL(url);
   };
 
-  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const content = event.target?.result as string;
-      if (content) {
+    try {
+      const ext = file.name.split('.').pop()?.toLowerCase();
+      // If it's a standard JSON file, try importProjectJson first
+      if (ext === 'json') {
+        const content = await file.text();
         const ok = importProjectJson(content);
         if (ok) {
           alert('Project imported successfully!');
-        } else {
-          alert('Failed to parse project JSON file.');
+          if (fileInputRef.current) fileInputRef.current.value = '';
+          return;
         }
       }
-    };
-    reader.readAsText(file);
+
+      // Universal parser for PDF, DOC, DOCX, TXT, MD, CSV, KML, GeoJSON
+      const parsed = await parseProjectFile(file);
+      if (parsed.success && parsed.cameras.length > 0) {
+        const added = addCamerasBatch(parsed.cameras);
+        alert(`Successfully imported and anchored ${added.length} cameras to Earth coordinates!`);
+      } else {
+        alert(parsed.error || 'Failed to detect camera coordinates in this file.');
+      }
+    } catch (err: any) {
+      alert(`Error reading file: ${err.message || 'Unknown error'}`);
+    }
+
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
+
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -445,9 +461,10 @@ export const CameraList: React.FC = () => {
           ref={fileInputRef}
           aria-label="Select Planning Project file to upload"
           style={{ display: 'none' }}
-          accept=".json,.geojson"
+          accept=".pdf,.doc,.docx,.txt,.md,.json,.geojson,.csv,.tsv,.kml,text/*"
           onChange={handleFileSelect}
         />
+
       </div>
     </div>
   );

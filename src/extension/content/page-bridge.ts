@@ -7,11 +7,19 @@
   if ((window as any).__cctv_bridge_installed__) return;
   (window as any).__cctv_bridge_installed__ = true;
 
-  const broadcast = () => {
+  const broadcast = (targetUrl?: any) => {
     try {
+      let resolvedHref = window.location.href;
+      if (typeof targetUrl === 'string' && targetUrl.trim()) {
+        try {
+          resolvedHref = new URL(targetUrl, window.location.href).href;
+        } catch {
+          resolvedHref = targetUrl;
+        }
+      }
       window.dispatchEvent(
         new CustomEvent('__cctv_url_change__', {
-          detail: { href: window.location.href }
+          detail: { href: resolvedHref }
         })
       );
     } catch {
@@ -22,17 +30,18 @@
   const origReplace = history.replaceState;
   history.replaceState = function (...args) {
     const ret = origReplace.apply(this, args);
-    broadcast();
+    broadcast(args[2]);
     return ret;
   };
 
   const origPush = history.pushState;
   history.pushState = function (...args) {
     const ret = origPush.apply(this, args);
-    broadcast();
+    broadcast(args[2]);
     return ret;
   };
 
-  window.addEventListener('hashchange', broadcast, { passive: true });
-  window.addEventListener('popstate', broadcast, { passive: true });
+  window.addEventListener('hashchange', () => broadcast(), { passive: true });
+  window.addEventListener('popstate', () => broadcast(), { passive: true });
 })();
+

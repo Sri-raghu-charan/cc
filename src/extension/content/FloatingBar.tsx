@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useCctv } from '../../context/CctvContext';
 import { ExtensionSidebar } from '../sidebar/ExtensionSidebar';
 import { StreetViewModal } from './StreetViewModal';
+import { ProjectDetailsModal } from './ProjectDetailsModal';
 import { storage } from '../../services/storage';
 import {
   Video,
@@ -13,7 +14,9 @@ import {
   GripHorizontal,
   ChevronDown,
   ChevronUp,
-  MapPin
+  MapPin,
+  FolderUp,
+  FileText
 } from 'lucide-react';
 
 interface Position {
@@ -49,8 +52,10 @@ export const FloatingBar: React.FC = () => {
   const [isMinimized, setIsMinimized] = useState<boolean>(false);
   const [isVisible, setIsVisible] = useState<boolean>(true);
   const [showStreetView, setShowStreetView] = useState<boolean>(false);
+  const [showProjectModal, setShowProjectModal] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isResizing, setIsResizing] = useState<boolean>(false);
+
 
   const dragStartRef = useRef<{ startX: number; startY: number; posX: number; posY: number }>({
     startX: 0,
@@ -345,6 +350,24 @@ export const FloatingBar: React.FC = () => {
               <MapPin size={12} />
             </button>
 
+            {/* Add Project Details Button (Upload PDF, DOC, TXT, MD, CSV, etc.) */}
+            <button
+              type="button"
+              className="btn btn-secondary btn-icon-only"
+              onClick={() => setShowProjectModal(true)}
+              title="Add Project Details & Coordinates (Upload PDF, DOC, TXT, MD, CSV)"
+              style={{
+                width: '24px',
+                height: '24px',
+                background: 'rgba(56, 189, 248, 0.15)',
+                color: '#38bdf8',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                borderRadius: '6px'
+              }}
+            >
+              <FolderUp size={13} />
+            </button>
+
             {/* Street View Inspector */}
             <button
               type="button"
@@ -406,6 +429,45 @@ export const FloatingBar: React.FC = () => {
         {/* Workstation Sidebar Content (When Expanded) */}
         {!isMinimized && (
           <>
+            {/* Project Details Quick Section Strip */}
+            <div
+              style={{
+                padding: '7px 12px',
+                background: 'linear-gradient(90deg, rgba(2, 132, 199, 0.2), rgba(15, 23, 42, 0.95))',
+                borderBottom: '1px solid rgba(56, 189, 248, 0.25)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '8px'
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#cbd5e1' }}>
+                <FileText size={13} color="#38bdf8" />
+                <span style={{ fontWeight: 600 }}>Project Details:</span>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setShowProjectModal(true)}
+                style={{
+                  background: 'linear-gradient(135deg, #0284c7, #38bdf8)',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '6px',
+                  padding: '4px 10px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '5px',
+                  boxShadow: '0 2px 8px rgba(56, 189, 248, 0.35)'
+                }}
+              >
+                <FolderUp size={12} /> Add Project Details
+              </button>
+            </div>
+
             <div style={{ flex: 1, overflow: 'hidden', height: `${panelHeight}px`, display: 'flex', flexDirection: 'column' }}>
               <ExtensionSidebar />
             </div>
@@ -448,6 +510,13 @@ export const FloatingBar: React.FC = () => {
         onClose={() => setShowStreetView(false)}
         camera={activeCamera}
       />
+
+      {/* Add Project Details & Universal File Upload Modal */}
+      <ProjectDetailsModal
+        isOpen={showProjectModal}
+        onClose={() => setShowProjectModal(false)}
+      />
     </>
   );
 };
+

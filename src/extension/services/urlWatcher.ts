@@ -24,6 +24,8 @@ class MapUrlWatcher {
   private pollInterval: number | null = null;
   private rafId: number | null = null;
   private currentState: CurrentMapState;
+  private isInteracting: boolean = false;
+  private lastPointerPos: { x: number; y: number } = { x: 0, y: 0 };
 
   constructor() {
     this.currentState = this.parseCurrentUrl();
@@ -96,20 +98,125 @@ class MapUrlWatcher {
       window.addEventListener('popstate', () => checkUpdate());
       window.addEventListener('hashchange', () => checkUpdate());
 
-      // 3. User interaction triggers (pointermove, wheel, mouseup)
-      window.addEventListener('wheel', () => checkUpdate(), { passive: true });
-      window.addEventListener('pointerup', () => {
-        checkUpdate();
-        setTimeout(() => checkUpdate(), 10);
-        setTimeout(() => checkUpdate(), 50);
-        setTimeout(() => checkUpdate(), 120);
-        setTimeout(() => checkUpdate(), 300);
-      }, { passive: true });
-      window.addEventListener('pointermove', (e) => {
-        if (e.buttons > 0) {
+      // 3. REAL-TIME INTERACTION GESTURE TRACKING (Zero-lag 60fps pan/zoom/tilt synchronization)
+      const isExtensionUi = (target: EventTarget | null): boolean => {
+        const el = target as HTMLElement | null;
+        return !!el?.closest?.(
+          '.cctv-floating-bar-wrapper, .cctv-interactive-layer, .cctv-streetview-modal, .cctv-project-modal, button, input, select, textarea'
+        );
+      };
+
+      window.addEventListener(
+        'pointerdown',
+        (e: PointerEvent) => {
+          if (isExtensionUi(e.target)) return;
+          this.isInteracting = true;
+          this.lastPointerPos = { x: e.clientX, y: e.clientY };
+        },
+        { passive: true }
+      );
+
+      window.addEventListener(
+        'pointermove',
+        (e: PointerEvent) => {
+          if (!this.isInteracting || e.buttons === 0) {
+            this.isInteracting = false;
+            return;
+          }
+          if (isExtensionUi(e.target)) return;
+
+          const dx = e.clientX - this.lastPointerPos.x;
+          const dy = e.clientY - this.lastPointerPos.y;
+          this.lastPointerPos = { x: e.clientX, y: e.clientY };
+
+          if (Math.abs(dx) < 0.2 && Math.abs(dy) < 0.2) return;
+
+          // A. Google Earth Kinematic Tracking
+          if (this.currentState.platform === 'earth' && this.currentState.earthView) {
+            const ev = this.currentState.earthView;
+
+            if (e.buttons === 1 && !e.shiftKey && !e.ctrlKey) {
+              // Left Mouse Drag: Pan across Earth surface
+              const dist = Math.max(10, ev.distance || 1000);
+              const fov = ((ev.fov || 35) * Math.PI) / 180;
+              const h = window.innerHeight || 800;
+              const mPerPx = (2 * dist * Math.tan(fov / 2)) / h;
+              const tiltRad = ((ev.pitch || 0) * Math.PI) / 180;
+              const headingRad = ((ev.heading || 0) * Math.PI) / 180;
+              const tiltCos = Math.max(0.18, Math.cos(tiltRad));
+
+              const dCamX = -dx * mPerPx;
+              const dCamY = (dy * mPerPx) / tiltCos;
+
+              const dEast = dCamX * Math.cos(headingRad) - dCamY * Math.sin(headingRad);
+              const dNorth = dCamX * Math.sin(headingRad) + dCamY * Math.cos(headingRad);
+
+              const latRad = (ev.latitude * Math.PI) / 180;
+              const dLat = dNorth / 111320;
+              const dLon = dEast / (111320 * Math.max(0.01, Math.cos(latRad)));
+
+              ev.latitude = Number((ev.latitude + dLat).toFixed(7));
+              ev.longitude = Number((ev.longitude + dLon).toFixed(7));
+              this.currentState.centerLat = ev.latitude;
+              this.currentState.centerLon = ev.longitude;
+              this.notify();
+            } else if (e.buttons === 2 || (e.buttons === 1 && (e.shiftKey || e.ctrlKey))) {
+              // Right Mouse Drag or Shift-Drag: Tilt (pitch) & Heading (yaw)
+              const dPitch = -dy * 0.25;
+              const dHeading = dx * 0.25;
+              ev.pitch = Math.max(0, Math.min(85, (ev.pitch || 0) + dPitch));
+              ev.heading = ((ev.heading || 0) + dHeading + 360) % 360;
+              this.notify();
+            }
+          } else if (this.currentState.platform === 'maps') {
+            // Google Maps 2D / 2.5D Mercator Kinematic Drag
+            const zoom = this.currentState.altitudeOrZoom || 17;
+            const scale = 256 * Math.pow(2, zoom);
+            const dLon = (-dx / scale) * 360;
+            const latRad = (this.currentState.centerLat * Math.PI) / 180;
+            const dLat = (dy / scale) * 360 * Math.cos(latRad);
+
+            this.currentState.centerLat = Number((this.currentState.centerLat + dLat).toFixed(7));
+            this.currentState.centerLon = Number((this.currentState.centerLon + dLon).toFixed(7));
+            if (this.currentState.mapsView) {
+              this.currentState.mapsView.latitude = this.currentState.centerLat;
+              this.currentState.mapsView.longitude = this.currentState.centerLon;
+            }
+            this.notify();
+          }
+        },
+        { passive: true }
+      );
+
+      window.addEventListener(
+        'pointerup',
+        () => {
+          this.isInteracting = false;
           checkUpdate();
-        }
-      }, { passive: true });
+          setTimeout(() => checkUpdate(), 20);
+          setTimeout(() => checkUpdate(), 80);
+          setTimeout(() => checkUpdate(), 200);
+          setTimeout(() => checkUpdate(), 500);
+        },
+        { passive: true }
+      );
+
+      window.addEventListener(
+        'wheel',
+        (e: WheelEvent) => {
+          if (isExtensionUi(e.target)) return;
+
+          if (this.currentState.platform === 'earth' && this.currentState.earthView) {
+            const ev = this.currentState.earthView;
+            const factor = e.deltaY > 0 ? 1.08 : 0.92;
+            ev.distance = Math.max(8, Number(((ev.distance || 1000) * factor).toFixed(1)));
+            this.currentState.altitudeOrZoom = ev.distance;
+            this.notify();
+          }
+          checkUpdate();
+        },
+        { passive: true }
+      );
 
       // 4. Per-frame check before each browser paint (guarantees 0-frame delay during active 3D pans)
       const rafLoop = () => {
@@ -167,7 +274,10 @@ class MapUrlWatcher {
         const rollMatch = rest.match(new RegExp(`${numPattern}r`));
 
         const altitude = altMatch ? parseFloat(altMatch[1]) : 0;
-        // If distance is omitted, in 2D nadir view distance equals altitude or default 1000m
+        // CRUCIAL: In Google Earth URL syntax:
+        // When 'd' exists: 'a' is ground target elevation (meters MSL), 'd' is camera distance.
+        // When 'd' is absent (2D nadir view): 'a' is camera eye altitude above ground, and ground target elevation is 0.
+        const groundElevation = distMatch ? altitude : 0;
         const distance = distMatch ? parseFloat(distMatch[1]) : (altitude > 0 ? altitude : 1000);
         const fov = fovMatch ? parseFloat(fovMatch[1]) : 35;
         const heading = headingMatch ? parseFloat(headingMatch[1]) : 0;
@@ -177,7 +287,7 @@ class MapUrlWatcher {
         const earthView: GoogleEarthViewState = {
           latitude: lat,
           longitude: lon,
-          altitude,
+          altitude: groundElevation,
           distance,
           fov: fov > 0 ? fov : 35,
           pitch,
@@ -264,3 +374,4 @@ class MapUrlWatcher {
 }
 
 export const urlWatcher = new MapUrlWatcher();
+

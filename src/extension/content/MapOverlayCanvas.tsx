@@ -485,8 +485,14 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
 
         const isSelected = cam.id === activeCameraId;
         const fp = footprints.get(cam.id);
-        // STRICT GEO-ANCHOR: camera elevation is locked to its stored ground coordinate
-        const camElev = cam.position.elevation ?? 0;
+        // STRICT GEO-ANCHOR: camera elevation is physically locked to terrain surface coordinates
+        const camElev =
+          cam.position.elevation !== undefined && cam.position.elevation !== 0
+            ? cam.position.elevation
+            : currentMapState.platform === 'earth' && currentMapState.earthView?.altitude
+            ? currentMapState.earthView.altitude
+            : 0;
+
 
         const groundPt = projectPointRealtime(cam.position.latitude, cam.position.longitude, camElev);
         const lensPt = projectPointRealtime(
@@ -702,13 +708,14 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
           ctx.fill();
         }
 
-        // Camera Name & Height Pill Badge (Anchored directly on canvas at 60 FPS)
+        // Camera Name Badge (Anchored directly on canvas at 60 FPS - ONLY camera name visible)
         if (groundPt.visible) {
           ctx.save();
-          const badgeText = `${cam.name} (${cam.mountingHeight}m)`;
+          const badgeText = cam.name;
           ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
           const textMetrics = ctx.measureText(badgeText);
-          const badgeW = textMetrics.width + 30;
+          const padX = 12;
+          const badgeW = textMetrics.width + padX * 2;
           const badgeH = 22;
           const badgeX = groundPt.x - badgeW / 2;
           const badgeY = groundPt.y - 36;
@@ -722,20 +729,16 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
           ctx.lineWidth = isSelected ? 2 : 1;
           ctx.stroke();
 
-          // Lock indicator icon
-          ctx.font = '10px system-ui, sans-serif';
-          ctx.fillStyle = '#38bdf8';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'middle';
-          ctx.fillText('🔒', badgeX + 7, badgeY + badgeH / 2);
-
-          // Camera Name & Height
+          // ONLY camera name is visible over there on the map
           ctx.font = 'bold 11px system-ui, -apple-system, sans-serif';
           ctx.fillStyle = '#ffffff';
-          ctx.fillText(badgeText, badgeX + 23, badgeY + badgeH / 2);
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(badgeText, groundPt.x, badgeY + badgeH / 2);
 
           ctx.restore();
         }
+
       });
 
       // 3. Draw pairwise overlaps
@@ -783,10 +786,12 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
       }
 
       ctx.restore();
+      animId = requestAnimationFrame(render);
     };
 
     animId = requestAnimationFrame(render);
     return () => cancelAnimationFrame(animId);
+
   }, [
     viewport,
     mapState,
