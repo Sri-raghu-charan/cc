@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "CCTV GeoPlanner - 3D Camera Coverage for Google Earth & Maps",
+  "name": "CCTV GeoPlanner - 3D Camera Coverage for Google Earth Web",
   "version": "1.0.0",
-  "description": "Professional 3D geospatial CCTV camera placement, FOV frustum, blind spot, and DORI coverage planning overlay for Google Earth and Google Maps.",
+  "description": "Professional 3D geospatial CCTV camera placement, FOV frustum, blind spot, and DORI coverage planning overlay for Google Earth Web.",
   "permissions": [
     "storage",
     "activeTab",
@@ -11,11 +11,6 @@
   ],
   "host_permissions": [
     "*://earth.google.com/*",
-    "*://*.google.com/earth/*",
-    "*://google.com/earth/*",
-    "*://*.google.com/maps/*",
-    "*://maps.google.com/*",
-    "*://google.com/maps/*",
     "https://server.arcgisonline.com/*"
   ],
   "background": {
@@ -25,12 +20,8 @@
   "content_scripts": [
     {
       "matches": [
-        "*://earth.google.com/*",
-        "*://*.google.com/earth/*",
-        "*://google.com/earth/*",
-        "*://*.google.com/maps/*",
-        "*://maps.google.com/*",
-        "*://google.com/maps/*"
+        "*://earth.google.com/web*",
+        "*://earth.google.com/web/*"
       ],
       "js": [
         "content/page-bridge.js"
@@ -40,14 +31,8 @@
     },
     {
       "matches": [
-        "*://earth.google.com/*",
-        "*://*.google.com/earth/*",
-        "*://google.com/earth/*",
-        "*://*.google.com/maps/*",
-        "*://maps.google.com/*",
-        "*://google.com/maps/*",
-        "*://localhost/*",
-        "*://127.0.0.1/*"
+        "*://earth.google.com/web*",
+        "*://earth.google.com/web/*"
       ],
       "js": [
         "content/content.js"
@@ -71,10 +56,11 @@
     {
       "resources": [
         "icons/*",
-        "assets/*"
+        "content/*",
+        "popup/assets/*"
       ],
       "matches": [
-        "<all_urls>"
+        "*://earth.google.com/*"
       ]
     }
   ]

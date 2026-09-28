@@ -10,10 +10,9 @@ import {
   ViewportSize,
   ScreenPoint
 } from '../../geo/projection';
-import { computeBearing } from '../../geo/coordinates';
+import { computeDestination } from '../../geo/coordinates';
 import { DORI_COLORS } from '../../geo/dori';
 import { VERIFIED_CAMERA_MODELS } from '../../data/cameraModels';
-import { getCameraIconUri } from '../../utils/cameraIcons';
 import { renderCameraCoverageSnapshot } from '../../utils/satelliteMapCapture';
 
 interface MapOverlayCanvasProps {
@@ -81,8 +80,8 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, [isSpecialMode]);
 
-  // Project point with exact terrain elevation anchoring from live map view state
-  const groundAlt = mapState.platform === 'earth' && mapState.earthView ? (mapState.earthView.altitude || 0) : 0;
+  // Strict Geo-Anchor: Real-world CCTV elevation is derived exclusively from camera.position.elevation
+  const groundAlt = 0;
 
   const projectPoint = useCallback(
     (lat: number, lon: number, elev: number = 0): ScreenPoint => {
@@ -135,7 +134,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
         // 2. Collect all screen points for the camera and its covered footprint & DORI zones
         const screenPoints: { x: number; y: number }[] = [];
         targetCams.forEach((cam) => {
-          const camElev = groundAlt;
+          const camElev = cam.position.elevation ?? 0;
           const gPt = projectPoint(cam.position.latitude, cam.position.longitude, camElev);
           if (gPt.visible) screenPoints.push({ x: gPt.x, y: gPt.y });
 
@@ -280,7 +279,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
     cameras,
     activeCameraId,
     footprints,
-    groundAlt,
+    doriLayers,
     projectPoint,
     viewport
   ]);
@@ -294,7 +293,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
 
     if (isPlacingCamera) {
       const newCam = addCameraAtCoordinates(
-        { latitude: coords.latitude, longitude: coords.longitude, elevation: coords.elevation ?? groundAlt },
+        { latitude: coords.latitude, longitude: coords.longitude, elevation: coords.elevation ?? 0 },
         VERIFIED_CAMERA_MODELS[0]
       );
       selectCamera(newCam.id);
@@ -306,7 +305,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
       relocateCamera(activeCameraId, {
         latitude: coords.latitude,
         longitude: coords.longitude,
-        elevation: coords.elevation ?? groundAlt
+        elevation: coords.elevation ?? 0
       });
       setIsRelocatingCamera(false);
       return;
@@ -316,7 +315,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
       aimCameraAt(activeCameraId, {
         latitude: coords.latitude,
         longitude: coords.longitude,
-        elevation: coords.elevation ?? groundAlt
+        elevation: coords.elevation ?? 0
       });
       setIsAimingCamera(false);
       return;
@@ -475,7 +474,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
       // 1. Draw blind spot polygons if available
       if (blindSpotAnalysis && blindSpotAnalysis.blindSpotPolygons.length > 0) {
         blindSpotAnalysis.blindSpotPolygons.forEach((poly) => {
-          drawPolygon(poly, 'rgba(239, 68, 68, 0.2)', 'rgba(239, 68, 68, 0.7)', 1.5, groundAlt);
+          drawPolygon(poly, 'rgba(239, 68, 68, 0.2)', 'rgba(239, 68, 68, 0.7)', 1.5, 0);
         });
       }
 
@@ -485,13 +484,10 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
 
         const isSelected = cam.id === activeCameraId;
         const fp = footprints.get(cam.id);
-        // STRICT GEO-ANCHOR: camera elevation is physically locked to terrain surface coordinates
-        const camElev =
-          cam.position.elevation !== undefined && cam.position.elevation !== 0
-            ? cam.position.elevation
-            : currentMapState.platform === 'earth' && currentMapState.earthView?.altitude
-            ? currentMapState.earthView.altitude
-            : 0;
+        // STRICT REAL-WORLD GEO-ANCHOR:
+        // CCTV camera elevation is strictly defined by camera.position.elevation.
+        // Google Earth viewport altitude/distance is NEVER substituted for camera elevation.
+        const camElev = cam.position.elevation ?? 0;
 
 
         const groundPt = projectPointRealtime(cam.position.latitude, cam.position.longitude, camElev);
@@ -541,7 +537,6 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
               ctx.font = 'bold 9px sans-serif';
               const textMetrics = ctx.measureText(label);
               const padX = 4;
-              const padY = 2;
               const badgeW = textMetrics.width + padX * 2;
               const badgeH = 13;
 
@@ -634,10 +629,34 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
           ctx.fillStyle = '#ffffff';
           ctx.fill();
 
-          // Draw realistic CCTV security camera body and lens oriented to camera heading
+          // PROJECTED CAMERA HEADING IN 3D PERSPECTIVE (PART 8):
+          // camera.heading belongs to the camera (immutable world azimuth).
+          // Google Earth's viewport heading belongs to the Earth viewport.
+          // Project a point along camera's world heading to determine exact screen orientation.
+          const headingWorldTarget = computeDestination(
+            cam.position.latitude,
+            cam.position.longitude,
+            cam.heading,
+            12
+          );
+          const headingScreenPt = projectPointRealtime(
+            headingWorldTarget.latitude,
+            headingWorldTarget.longitude,
+            camElev
+          );
+
+          let screenAngleRad: number;
+          if (headingScreenPt.visible && Math.hypot(headingScreenPt.x - groundPt.x, headingScreenPt.y - groundPt.y) > 0.5) {
+            screenAngleRad = Math.atan2(headingScreenPt.y - groundPt.y, headingScreenPt.x - groundPt.x);
+          } else {
+            const earthHeading = currentMapState.earthView?.heading || 0;
+            screenAngleRad = ((cam.heading - earthHeading - 90) * Math.PI) / 180;
+          }
+
+          // Draw realistic CCTV security camera body and lens oriented to projected camera heading
           ctx.save();
           ctx.translate(groundPt.x, groundPt.y);
-          ctx.rotate((cam.heading - 90) * (Math.PI / 180));
+          ctx.rotate(screenAngleRad);
 
           // Swivel mounting arm / bracket
           ctx.fillStyle = '#64748b';
@@ -685,10 +704,30 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
 
         // Heading Direction Line & Arrow extending from fixed ground markup point
         if (groundPt.visible) {
+          // Recompute screen angle for heading line
+          const headingWorldTarget = computeDestination(
+            cam.position.latitude,
+            cam.position.longitude,
+            cam.heading,
+            12
+          );
+          const headingScreenPt = projectPointRealtime(
+            headingWorldTarget.latitude,
+            headingWorldTarget.longitude,
+            camElev
+          );
+
+          let screenAngleRad: number;
+          if (headingScreenPt.visible && Math.hypot(headingScreenPt.x - groundPt.x, headingScreenPt.y - groundPt.y) > 0.5) {
+            screenAngleRad = Math.atan2(headingScreenPt.y - groundPt.y, headingScreenPt.x - groundPt.x);
+          } else {
+            const earthHeading = currentMapState.earthView?.heading || 0;
+            screenAngleRad = ((cam.heading - earthHeading - 90) * Math.PI) / 180;
+          }
+
           const arrowLen = 38;
-          const rad = (cam.heading - 90) * (Math.PI / 180);
-          const endX = groundPt.x + arrowLen * Math.cos(rad);
-          const endY = groundPt.y + arrowLen * Math.sin(rad);
+          const endX = groundPt.x + arrowLen * Math.cos(screenAngleRad);
+          const endY = groundPt.y + arrowLen * Math.sin(screenAngleRad);
 
           ctx.beginPath();
           ctx.moveTo(groundPt.x, groundPt.y);
@@ -701,8 +740,8 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
           const tipAngle = Math.PI / 6;
           ctx.beginPath();
           ctx.moveTo(endX, endY);
-          ctx.lineTo(endX - 8 * Math.cos(rad - tipAngle), endY - 8 * Math.sin(rad - tipAngle));
-          ctx.lineTo(endX - 8 * Math.cos(rad + tipAngle), endY - 8 * Math.sin(rad + tipAngle));
+          ctx.lineTo(endX - 8 * Math.cos(screenAngleRad - tipAngle), endY - 8 * Math.sin(screenAngleRad - tipAngle));
+          ctx.lineTo(endX - 8 * Math.cos(screenAngleRad + tipAngle), endY - 8 * Math.sin(screenAngleRad + tipAngle));
           ctx.closePath();
           ctx.fillStyle = cam.color || '#3b82f6';
           ctx.fill();
@@ -806,7 +845,6 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
     isRelocatingCamera,
     isAimingCamera,
     mousePos,
-    groundAlt,
     projectPoint
   ]);
 
@@ -868,7 +906,7 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
           }}
         >
           <span>
-            {isPlacingCamera && '📍 New Camera Mode: Click anywhere on Earth or Maps to drop camera'}
+            {isPlacingCamera && '📍 New Camera Mode: Click anywhere on Earth to drop camera'}
             {isRelocatingCamera && `📍 Move Camera: Click on the target junction or road on Earth to place ${activeCamera?.name || 'Camera'}`}
             {isAimingCamera && `🎯 Aiming ${activeCamera?.name || 'Camera'}: Click down the road to point camera`}
           </span>

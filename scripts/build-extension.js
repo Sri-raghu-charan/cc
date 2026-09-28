@@ -5,9 +5,9 @@ import react from '@vitejs/plugin-react';
 
 async function runExtensionBuild() {
   const rootDir = process.cwd();
-  const outDir = path.resolve(rootDir, 'dist-extension');
+  const outDir = path.resolve(rootDir, 'chromeexe');
 
-  console.log('Cleaning dist-extension/ directory...');
+  console.log('Cleaning chromeexe/ directory...');
   if (fs.existsSync(outDir)) {
     fs.rmSync(outDir, { recursive: true, force: true });
   }
@@ -21,6 +21,7 @@ async function runExtensionBuild() {
   console.log('0. Building page bridge script (MAIN world)...');
   await build({
     configFile: false,
+    publicDir: false,
     define: {
       'process.env.NODE_ENV': JSON.stringify('production')
     },
@@ -40,6 +41,7 @@ async function runExtensionBuild() {
   console.log('1. Building content script (IIFE standalone)...');
   await build({
     configFile: false,
+    publicDir: false,
     plugins: [react()],
     define: {
       'process.env.NODE_ENV': JSON.stringify('production')
@@ -89,6 +91,7 @@ async function runExtensionBuild() {
   console.log('2. Building background service worker...');
   await build({
     configFile: false,
+    publicDir: false,
     build: {
       outDir: path.join(outDir, 'background'),
       emptyOutDir: false,
@@ -105,6 +108,7 @@ async function runExtensionBuild() {
   const popupSrcDir = path.resolve(rootDir, 'src/extension/popup');
   await build({
     configFile: false,
+    publicDir: false,
     root: popupSrcDir,
     plugins: [react()],
     base: './',
@@ -132,7 +136,14 @@ async function runExtensionBuild() {
     }
   }
 
-  console.log('Extension build completed successfully into dist-extension/!');
+  // Also maintain dist-extension for backward compatibility
+  const legacyDir = path.resolve(rootDir, 'dist-extension');
+  if (fs.existsSync(legacyDir)) {
+    fs.rmSync(legacyDir, { recursive: true, force: true });
+  }
+  fs.cpSync(outDir, legacyDir, { recursive: true });
+
+  console.log('Extension build completed successfully into chromeexe/ (and mirrored to dist-extension/)!');
 }
 
 runExtensionBuild().catch((err) => {

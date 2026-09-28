@@ -7,7 +7,7 @@ function copyExtensionAssetsPlugin(): Plugin {
   return {
     name: 'copy-extension-assets',
     closeBundle() {
-      const outDir = path.resolve(__dirname, 'dist-extension');
+      const outDir = path.resolve(__dirname, 'chromeexe');
       if (!fs.existsSync(outDir)) {
         fs.mkdirSync(outDir, { recursive: true });
       }
@@ -17,7 +17,7 @@ function copyExtensionAssetsPlugin(): Plugin {
       const manifestDest = path.resolve(outDir, 'manifest.json');
       if (fs.existsSync(manifestSrc)) {
         fs.copyFileSync(manifestSrc, manifestDest);
-        console.log('Copied manifest.json to dist-extension/');
+        console.log('Copied manifest.json to chromeexe/');
       }
 
       // 2. Copy icons directory
@@ -31,10 +31,10 @@ function copyExtensionAssetsPlugin(): Plugin {
         for (const file of files) {
           fs.copyFileSync(path.join(iconsSrcDir, file), path.join(iconsDestDir, file));
         }
-        console.log(`Copied ${files.length} icons to dist-extension/icons/`);
+        console.log(`Copied ${files.length} icons to chromeexe/icons/`);
       }
 
-      // 3. Move popup.html to dist-extension/popup/popup.html
+      // 3. Move popup.html to chromeexe/popup/popup.html
       const nestedPopupHtml = path.resolve(outDir, 'src', 'extension', 'popup', 'popup.html');
       const targetPopupDir = path.resolve(outDir, 'popup');
       const targetPopupHtml = path.resolve(targetPopupDir, 'popup.html');
@@ -46,10 +46,17 @@ function copyExtensionAssetsPlugin(): Plugin {
       if (fs.existsSync(nestedPopupHtml)) {
         let content = fs.readFileSync(nestedPopupHtml, 'utf-8');
         fs.writeFileSync(targetPopupHtml, content);
-        console.log('Moved popup.html to dist-extension/popup/popup.html');
+        console.log('Moved popup.html to chromeexe/popup/popup.html');
         // Clean up nested src folder
         fs.rmSync(path.resolve(outDir, 'src'), { recursive: true, force: true });
       }
+
+      // 4. Mirror to dist-extension for compatibility
+      const legacyDir = path.resolve(__dirname, 'dist-extension');
+      if (fs.existsSync(legacyDir)) {
+        fs.rmSync(legacyDir, { recursive: true, force: true });
+      }
+      fs.cpSync(outDir, legacyDir, { recursive: true });
     }
   };
 }
@@ -57,7 +64,7 @@ function copyExtensionAssetsPlugin(): Plugin {
 export default defineConfig({
   plugins: [react(), copyExtensionAssetsPlugin()],
   build: {
-    outDir: 'dist-extension',
+    outDir: 'chromeexe',
     emptyOutDir: true,
     rollupOptions: {
       input: {

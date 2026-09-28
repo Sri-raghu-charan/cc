@@ -16,14 +16,14 @@ The project includes a ready-to-load Manifest V3 browser extension that injects 
    ```bash
    npm run build:extension
    ```
-   *(This outputs the unpacked extension in the `dist-extension/` directory).*
+   *(This outputs the unpacked extension in the `chromeexe/` directory).*
 
 2. **Load into Google Chrome / Microsoft Edge / Brave:**
    - Open Chrome and navigate to `chrome://extensions/` (or `edge://extensions/`).
    - Turn **ON** **Developer mode** (toggle in the top-right corner).
    - Click the **"Load unpacked"** button.
-   - Select the `d:\files\dist-extension` folder.
-   - The **"CCTV GeoPlanner - 3D Camera Coverage for Google Earth & Maps"** extension will appear in your toolbar!
+   - Select the `chromeexe` folder inside your project directory (`/home/charan/Desktop/cc/chromeexe`).
+   - The **"CCTV GeoPlanner - 3D Camera Coverage for Google Earth Web"** extension will appear in your toolbar!
 
 3. **Use on Google Earth & Google Maps:**
    - Navigate to [Google Earth Web](https://earth.google.com/web/) or [Google Maps](https://www.google.com/maps).
