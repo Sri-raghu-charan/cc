@@ -185,11 +185,10 @@ export const Header: React.FC = () => {
                 top: 'calc(100% + 6px)',
                 left: 0,
                 width: '420px',
-                background: 'rgba(15, 23, 42, 0.98)',
-                border: '1px solid var(--border-medium)',
+                background: '#FFFFFF',
+                border: '1px solid #CBD5E1',
                 borderRadius: 'var(--radius-md)',
-                boxShadow: 'var(--shadow-lg)',
-                backdropFilter: 'blur(16px)',
+                boxShadow: '0 12px 28px -4px rgba(15, 23, 42, 0.2)',
                 zIndex: 200,
                 overflow: 'hidden',
                 display: 'flex',
@@ -214,12 +213,12 @@ export const Header: React.FC = () => {
                       cursor: 'pointer',
                       transition: 'background 0.1s'
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.background = 'rgba(59, 130, 246, 0.15)')}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = '#EFF6FF')}
                     onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', overflow: 'hidden' }}>
                       <MapPin size={14} style={{ color: 'var(--accent-primary)', flexShrink: 0 }} />
-                      <div style={{ fontSize: '12px', color: '#fff', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                      <div style={{ fontSize: '12px', color: '#1E293B', whiteSpace: 'nowrap', textOverflow: 'ellipsis', overflow: 'hidden' }}>
                         {res.display_name}
                       </div>
                     </div>

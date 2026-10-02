@@ -72,14 +72,14 @@ const PopupApp: React.FC = () => {
       {/* Header */}
       <div className="popup-header">
         <div className="popup-title">
-          <Video size={18} style={{ color: '#38bdf8' }} />
+          <Video size={18} style={{ color: '#2563eb' }} />
           <span>CCTV GeoPlanner</span>
         </div>
         <span
           style={{
             fontSize: '10px',
-            background: 'rgba(16, 185, 129, 0.2)',
-            color: '#10b981',
+            background: '#dcfce7',
+            color: '#16a34a',
             padding: '2px 8px',
             borderRadius: '10px',
             fontWeight: 700
@@ -92,20 +92,21 @@ const PopupApp: React.FC = () => {
       {/* Status Card */}
       <div className="popup-card">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span style={{ fontSize: '12px', color: '#94a3b8' }}>Saved Cameras:</span>
-          <span style={{ fontSize: '13px', fontWeight: 700, color: '#38bdf8' }}>
+          <span style={{ fontSize: '12px', color: '#64748b' }}>Saved Cameras:</span>
+          <span style={{ fontSize: '13px', fontWeight: 700, color: '#2563eb' }}>
             {cameras.length} Active
           </span>
         </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
-          <span style={{ fontSize: '12px', color: '#94a3b8' }}>Target Host:</span>
+          <span style={{ fontSize: '12px', color: '#64748b' }}>Target Host:</span>
           <span
             style={{
               fontSize: '11px',
-              color: activeTabIsEarth ? '#10b981' : '#f59e0b',
+              color: activeTabIsEarth ? '#16a34a' : '#d97706',
               display: 'flex',
               alignItems: 'center',
-              gap: '4px'
+              gap: '4px',
+              fontWeight: 600
             }}
           >
             {activeTabIsEarth ? (

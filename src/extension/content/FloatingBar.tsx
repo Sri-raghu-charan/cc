@@ -1,22 +1,16 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useCctv } from '../../context/CctvContext';
 import { ExtensionSidebar } from '../sidebar/ExtensionSidebar';
 import { StreetViewModal } from './StreetViewModal';
 import { ProjectDetailsModal } from './ProjectDetailsModal';
+import { SettingsModal } from '../../components/Settings/SettingsModal';
 import { storage } from '../../services/storage';
 import {
   Video,
-  Plus,
-  Compass,
   Minus,
   Maximize2,
   X,
-  GripHorizontal,
-  ChevronDown,
-  ChevronUp,
-  MapPin,
-  FolderUp,
-  FileText
+  Settings
 } from 'lucide-react';
 
 interface Position {
@@ -25,19 +19,12 @@ interface Position {
 }
 
 export const FloatingBar: React.FC = () => {
-  const {
-    cameras,
-    activeCamera,
-    isPlacingCamera,
-    setIsPlacingCamera,
-    isRelocatingCamera,
-    setIsRelocatingCamera
-  } = useCctv();
+  const { cameras, activeCamera } = useCctv();
 
   const getDefaultPosition = (): Position => {
     const width = typeof window !== 'undefined' ? window.innerWidth : 1200;
     return {
-      x: Math.max(20, width - 420),
+      x: Math.max(20, width - 430),
       y: 70
     };
   };
@@ -51,11 +38,11 @@ export const FloatingBar: React.FC = () => {
   const [panelHeight, setPanelHeight] = useState<number>(getDefaultHeight);
   const [isMinimized, setIsMinimized] = useState<boolean>(false);
   const [isVisible, setIsVisible] = useState<boolean>(true);
+  const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [showStreetView, setShowStreetView] = useState<boolean>(false);
   const [showProjectModal, setShowProjectModal] = useState<boolean>(false);
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [isResizing, setIsResizing] = useState<boolean>(false);
-
 
   const dragStartRef = useRef<{ startX: number; startY: number; posX: number; posY: number }>({
     startX: 0,
@@ -82,9 +69,9 @@ export const FloatingBar: React.FC = () => {
       const savedHeight = await storage.get<number>('cctv_floating_bar_height', defH);
 
       // Clamp within viewport
-      const clampedX = Math.max(10, Math.min(window.innerWidth - 320, savedPos.x));
+      const clampedX = Math.max(10, Math.min(window.innerWidth - 340, savedPos.x));
       const clampedY = Math.max(10, Math.min(window.innerHeight - 80, savedPos.y));
-      const clampedH = Math.max(380, Math.min(window.innerHeight - clampedY - 20, savedHeight));
+      const clampedH = Math.max(400, Math.min(window.innerHeight - clampedY - 20, savedHeight));
 
       setPosition({ x: clampedX, y: clampedY });
       setIsMinimized(savedMin);
@@ -123,9 +110,8 @@ export const FloatingBar: React.FC = () => {
     storage.set('cctv_floating_bar_visible', isVisible);
   }, [isVisible]);
 
-  // Handle Dragging
+  // Handle Dragging from header
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
-    // Only drag from header handle
     if ((e.target as HTMLElement).closest('button')) return;
 
     setIsDragging(true);
@@ -148,8 +134,7 @@ export const FloatingBar: React.FC = () => {
     const newX = dragStartRef.current.posX + deltaX;
     const newY = dragStartRef.current.posY + deltaY;
 
-    // Clamp within window bounds
-    const width = isMinimized ? 300 : 380;
+    const width = isMinimized ? 300 : 400;
     const height = isMinimized ? 50 : 500;
     const clampedX = Math.max(10, Math.min(window.innerWidth - width, newX));
     const clampedY = Math.max(10, Math.min(window.innerHeight - height, newY));
@@ -184,7 +169,7 @@ export const FloatingBar: React.FC = () => {
     if (!isResizing) return;
     const deltaY = e.clientY - resizeStartRef.current.startY;
     const maxAvailable = window.innerHeight - position.y - 20;
-    const newH = Math.max(380, Math.min(maxAvailable, resizeStartRef.current.startHeight + deltaY));
+    const newH = Math.max(400, Math.min(maxAvailable, resizeStartRef.current.startHeight + deltaY));
     setPanelHeight(newH);
   };
 
@@ -201,7 +186,7 @@ export const FloatingBar: React.FC = () => {
   };
 
   if (!isVisible) {
-    // Mini restore button on screen edge if user closed the bar
+    // Restore button on screen edge if closed
     return (
       <button
         type="button"
@@ -211,18 +196,18 @@ export const FloatingBar: React.FC = () => {
           top: '70px',
           right: '20px',
           zIndex: 2147483647,
-          background: 'rgba(15, 23, 42, 0.96)',
-          border: '1.5px solid #38bdf8',
-          color: '#38bdf8',
-          borderRadius: '20px',
+          background: '#FFFFFF',
+          border: '1.5px solid #2563EB',
+          color: '#2563EB',
+          borderRadius: '24px',
           padding: '8px 16px',
-          fontSize: '13px',
+          fontSize: '12.5px',
           fontWeight: 700,
           cursor: 'pointer',
           display: 'flex',
           alignItems: 'center',
           gap: '8px',
-          boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6), 0 0 12px rgba(56, 189, 248, 0.3)',
+          boxShadow: '0 8px 24px rgba(15, 23, 42, 0.16)',
           pointerEvents: 'auto'
         }}
       >
@@ -235,193 +220,70 @@ export const FloatingBar: React.FC = () => {
     <>
       <div
         ref={barRef}
-        className="cctv-floating-bar-wrapper"
+        className="cctv-floating-bar-wrapper cctv-app-window"
         style={{
           position: 'fixed',
           left: `${position.x}px`,
           top: `${position.y}px`,
-          width: isMinimized ? '320px' : '380px',
-          maxHeight: isMinimized ? 'auto' : 'calc(100vh - 60px)',
-          background: 'rgba(15, 23, 42, 0.96)',
-          backdropFilter: 'blur(16px)',
-          border: '1px solid rgba(148, 163, 184, 0.25)',
+          width: isMinimized ? '320px' : '400px',
+          background: '#FFFFFF',
+          border: '1px solid #E2E8F0',
           borderRadius: '12px',
-          boxShadow: '0 20px 40px -8px rgba(0, 0, 0, 0.7), 0 0 1px 1px rgba(255, 255, 255, 0.05)',
+          boxShadow: '0 20px 40px -8px rgba(15, 23, 42, 0.18), 0 0 0 1px rgba(15, 23, 42, 0.05)',
           zIndex: 99990,
           display: 'flex',
           flexDirection: 'column',
           overflow: 'hidden',
           pointerEvents: 'auto',
-          transition: isDragging ? 'none' : 'box-shadow 0.2s, border-color 0.2s'
+          transition: isDragging ? 'none' : 'box-shadow 0.2s'
         }}
       >
-        {/* Floating Bar Header (Always Visible & Draggable) */}
+        {/* Floating Bar Window Header */}
         <div
-          className="cctv-floating-bar-header"
+          className="cctv-window-header"
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
-          style={{
-            padding: '10px 14px',
-            background: 'rgba(30, 41, 59, 0.9)',
-            borderBottom: isMinimized ? 'none' : '1px solid rgba(148, 163, 184, 0.15)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            cursor: isDragging ? 'grabbing' : 'grab',
-            userSelect: 'none'
-          }}
+          style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
         >
-          {/* Title & Status */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <GripHorizontal size={14} style={{ color: '#64748b' }} />
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ fontWeight: 700, fontSize: '13px', color: '#f8fafc', letterSpacing: '-0.2px' }}>
-                CCTV Planner
-              </span>
-              {/* Status Indicator Dot */}
-              <span
-                style={{
-                  display: 'inline-block',
-                  width: '7px',
-                  height: '7px',
-                  borderRadius: '50%',
-                  background: '#10b981',
-                  boxShadow: '0 0 8px #10b981'
-                }}
-                title="Geodetic Engine Active"
-              />
-              <span
-                style={{
-                  fontSize: '10px',
-                  background: 'rgba(56, 189, 248, 0.15)',
-                  color: '#38bdf8',
-                  padding: '1px 6px',
-                  borderRadius: '10px',
-                  fontWeight: 600
-                }}
-              >
-                {cameras.length} CAM{cameras.length === 1 ? '' : 'S'}
-              </span>
+          {/* Brand Logo & Title */}
+          <div className="window-header-brand">
+            <div className="window-brand-icon">
+              <Video size={15} />
             </div>
+            <span className="window-brand-title">CCTV Planner</span>
           </div>
 
-          {/* Quick Header Actions */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-            {/* Quick Add Camera */}
+          {/* Right Header Actions (Settings, Minimize, Close) */}
+          <div className="window-header-actions">
             <button
               type="button"
-              className="btn btn-primary btn-icon-only"
-              onClick={() => {
-                setIsPlacingCamera(!isPlacingCamera);
-                setIsRelocatingCamera(false);
-              }}
-              title={isPlacingCamera ? 'Cancel camera placement' : 'Add new camera to map'}
-              style={{
-                width: '24px',
-                height: '24px',
-                background: isPlacingCamera ? '#38bdf8' : '#0284c7',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '6px'
-              }}
+              className="window-action-btn"
+              onClick={() => setShowSettingsModal(true)}
+              title="Settings & Geospatial Tokens"
+              aria-label="Settings & Geospatial Tokens"
             >
-              <Plus size={13} />
+              <Settings size={15} />
             </button>
 
-            {/* Quick Relocate Active Camera */}
             <button
               type="button"
-              className="btn btn-secondary btn-icon-only"
-              onClick={() => {
-                setIsRelocatingCamera(!isRelocatingCamera);
-                setIsPlacingCamera(false);
-              }}
-              title={isRelocatingCamera ? 'Cancel relocation' : 'Relocate active camera to junction / click'}
-              style={{
-                width: '24px',
-                height: '24px',
-                background: isRelocatingCamera ? '#0284c7' : 'rgba(51, 65, 85, 0.6)',
-                color: isRelocatingCamera ? '#fff' : '#94a3b8',
-                border: '1px solid rgba(148, 163, 184, 0.2)',
-                borderRadius: '6px'
-              }}
-            >
-              <MapPin size={12} />
-            </button>
-
-            {/* Add Project Details Button (Upload PDF, DOC, TXT, MD, CSV, etc.) */}
-            <button
-              type="button"
-              className="btn btn-secondary btn-icon-only"
-              onClick={() => setShowProjectModal(true)}
-              title="Add Project Details & Coordinates (Upload PDF, DOC, TXT, MD, CSV)"
-              style={{
-                width: '24px',
-                height: '24px',
-                background: 'rgba(56, 189, 248, 0.15)',
-                color: '#38bdf8',
-                border: '1px solid rgba(56, 189, 248, 0.35)',
-                borderRadius: '6px'
-              }}
-            >
-              <FolderUp size={13} />
-            </button>
-
-            {/* Street View Inspector */}
-            <button
-              type="button"
-              className="btn btn-secondary btn-icon-only"
-              onClick={() => setShowStreetView(true)}
-              title="Inspect Real-World Street View"
-              style={{
-                width: '24px',
-                height: '24px',
-                background: 'rgba(51, 65, 85, 0.6)',
-                color: '#94a3b8',
-                border: '1px solid rgba(148, 163, 184, 0.2)',
-                borderRadius: '6px'
-              }}
-            >
-              <Compass size={13} />
-            </button>
-
-            {/* Minimize / Maximize Button */}
-            <button
-              type="button"
-              className="btn btn-secondary btn-icon-only"
+              className="window-action-btn"
               onClick={() => setIsMinimized(!isMinimized)}
-              title={isMinimized ? 'Expand CCTV Planner' : 'Minimize to compact bar'}
-              style={{
-                width: '24px',
-                height: '24px',
-                background: 'transparent',
-                color: '#94a3b8',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer'
-              }}
+              title={isMinimized ? 'Expand CCTV Planner' : 'Minimize'}
+              aria-label={isMinimized ? 'Expand CCTV Planner' : 'Minimize'}
             >
-              {isMinimized ? <Maximize2 size={13} /> : <Minus size={13} />}
+              {isMinimized ? <Maximize2 size={13} /> : <Minus size={14} />}
             </button>
 
-            {/* Close / Hide Button */}
             <button
               type="button"
-              className="btn btn-secondary btn-icon-only"
+              className="window-action-btn"
               onClick={() => setIsVisible(false)}
-              title="Hide CCTV Planner (Restore from top right)"
-              style={{
-                width: '24px',
-                height: '24px',
-                background: 'transparent',
-                color: '#64748b',
-                border: 'none',
-                borderRadius: '6px',
-                cursor: 'pointer'
-              }}
+              title="Hide CCTV Planner (Restore from screen edge)"
+              aria-label="Hide CCTV Planner"
             >
-              <X size={13} />
+              <X size={15} />
             </button>
           </div>
         </div>
@@ -429,46 +291,15 @@ export const FloatingBar: React.FC = () => {
         {/* Workstation Sidebar Content (When Expanded) */}
         {!isMinimized && (
           <>
-            {/* Project Details Quick Section Strip */}
             <div
               style={{
-                padding: '7px 12px',
-                background: 'linear-gradient(90deg, rgba(2, 132, 199, 0.2), rgba(15, 23, 42, 0.95))',
-                borderBottom: '1px solid rgba(56, 189, 248, 0.25)',
+                flex: 1,
+                overflow: 'hidden',
+                height: `${panelHeight}px`,
                 display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '8px'
+                flexDirection: 'column'
               }}
             >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#cbd5e1' }}>
-                <FileText size={13} color="#38bdf8" />
-                <span style={{ fontWeight: 600 }}>Project Details:</span>
-              </div>
-
-              <button
-                type="button"
-                onClick={() => setShowProjectModal(true)}
-                style={{
-                  background: 'linear-gradient(135deg, #0284c7, #38bdf8)',
-                  color: '#ffffff',
-                  border: 'none',
-                  borderRadius: '6px',
-                  padding: '4px 10px',
-                  fontSize: '11px',
-                  fontWeight: 700,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '5px',
-                  boxShadow: '0 2px 8px rgba(56, 189, 248, 0.35)'
-                }}
-              >
-                <FolderUp size={12} /> Add Project Details
-              </button>
-            </div>
-
-            <div style={{ flex: 1, overflow: 'hidden', height: `${panelHeight}px`, display: 'flex', flexDirection: 'column' }}>
               <ExtensionSidebar />
             </div>
 
@@ -479,9 +310,9 @@ export const FloatingBar: React.FC = () => {
               onPointerUp={handleResizePointerUp}
               title="Drag up or down to resize CCTV Planner height"
               style={{
-                height: '14px',
-                background: 'rgba(30, 41, 59, 0.95)',
-                borderTop: '1px solid rgba(148, 163, 184, 0.15)',
+                height: '12px',
+                background: '#F8FAFC',
+                borderTop: '1px solid #E2E8F0',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
@@ -492,9 +323,9 @@ export const FloatingBar: React.FC = () => {
             >
               <div
                 style={{
-                  width: '38px',
+                  width: '36px',
                   height: '3px',
-                  background: isResizing ? '#38bdf8' : 'rgba(148, 163, 184, 0.4)',
+                  background: isResizing ? '#2563EB' : '#CBD5E1',
                   borderRadius: '2px',
                   transition: 'background 0.15s ease'
                 }}
@@ -504,6 +335,12 @@ export const FloatingBar: React.FC = () => {
         )}
       </div>
 
+      {/* Settings Modal */}
+      <SettingsModal
+        isOpen={showSettingsModal}
+        onClose={() => setShowSettingsModal(false)}
+      />
+
       {/* Street View Modal */}
       <StreetViewModal
         isOpen={showStreetView}
@@ -511,7 +348,7 @@ export const FloatingBar: React.FC = () => {
         camera={activeCamera}
       />
 
-      {/* Add Project Details & Universal File Upload Modal */}
+      {/* Project Details Modal */}
       <ProjectDetailsModal
         isOpen={showProjectModal}
         onClose={() => setShowProjectModal(false)}
@@ -519,4 +356,3 @@ export const FloatingBar: React.FC = () => {
     </>
   );
 };
-

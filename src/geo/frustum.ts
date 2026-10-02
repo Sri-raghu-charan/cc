@@ -167,8 +167,8 @@ export function computeCameraFootprint(
   const halfHfovRad = (Math.min(180, Math.max(1, hfov)) / 2) * TO_RAD;
   const footprintWidthFarMeters = Number((2 * farDistance * Math.sin(halfHfovRad)).toFixed(2));
 
-  // Full footprint polygon
-  const coordinates = calculateFootprintForRange(params, nearDistance, farDistance, 12);
+  // Full footprint polygon originating at the camera's fixed ground coordinate to its optical range
+  const coordinates = calculateFootprintForRange(params, 0, farDistance, 12);
 
   // Calculate polygon ground area using Turf
   let totalAreaM2 = 0;

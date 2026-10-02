@@ -464,27 +464,7 @@ export const CesiumMap: React.FC = () => {
         }
       });
 
-      // 4. Direction Indicator Arrow clamped along ground heading
-      const arrowHeadingRad = Cesium.Math.toRadians(camera.heading);
-      const arrowLength = 5.0; // 5 meters long
-      const arrowEndGround = Cesium.Cartesian3.fromDegrees(
-        camera.position.longitude + (arrowLength * Math.sin(arrowHeadingRad)) / 111320,
-        camera.position.latitude + (arrowLength * Math.cos(arrowHeadingRad)) / 110540,
-        0
-      );
-      viewer.entities.add({
-        id: `${camera.id}-heading-arrow`,
-        polyline: {
-          positions: [groundPos, arrowEndGround],
-          width: 3,
-          clampToGround: true,
-          material: new Cesium.PolylineArrowMaterialProperty(
-            Cesium.Color.fromCssColorString(camera.color)
-          )
-        }
-      });
-
-      // Frustum Geometry on Ground
+      // Frustum Ground Coverage Area - radiating from fixed camera point to optical reach
       const fp = footprints.get(camera.id);
       if (fp && fp.coordinates.length >= 3) {
         // Flattened degrees array [lon0, lat0, lon1, lat1, ...]
@@ -493,38 +473,18 @@ export const CesiumMap: React.FC = () => {
           flatCoords.push(v.longitude, v.latitude);
         });
 
-        // Main Footprint Polygon clamped strictly to ground
+        // Main Footprint Polygon clamped strictly to ground showing true covered area
         if (doriLayers.maxGeometric) {
+          const coverageColor = isSelected ? '#2563EB' : '#16A34A';
           viewer.entities.add({
             id: `${camera.id}-footprint`,
             polygon: {
               hierarchy: Cesium.Cartesian3.fromDegreesArray(flatCoords),
-              material: Cesium.Color.fromCssColorString(camera.color).withAlpha(isSelected ? 0.35 : 0.2),
+              material: Cesium.Color.fromCssColorString(coverageColor).withAlpha(isSelected ? 0.32 : 0.22),
               outline: true,
-              outlineColor: Cesium.Color.fromCssColorString(camera.color),
-              outlineWidth: isSelected ? 3 : 1,
+              outlineColor: Cesium.Color.fromCssColorString(coverageColor).withAlpha(0.9),
+              outlineWidth: isSelected ? 2.5 : 1.5,
               classificationType: Cesium.ClassificationType.BOTH
-            }
-          });
-        }
-
-        // 3D Optical Sightline Frustum Rays (connecting lens to ground footprint boundary)
-        if (isSelected && fp.coordinates.length >= 4) {
-          const cornerIndices = [0, Math.floor(fp.coordinates.length / 4), Math.floor(fp.coordinates.length / 2), Math.floor((3 * fp.coordinates.length) / 4)];
-          cornerIndices.forEach((idx, i) => {
-            const corner = fp.coordinates[idx];
-            if (corner) {
-              const groundVertex = Cesium.Cartesian3.fromDegrees(corner.longitude, corner.latitude, 0);
-              viewer.entities.add({
-                id: `${camera.id}-sightline-${i}`,
-                polyline: {
-                  positions: [lensPos, groundVertex],
-                  width: 1,
-                  material: new Cesium.PolylineDashMaterialProperty({
-                    color: Cesium.Color.fromCssColorString(camera.color).withAlpha(0.6)
-                  })
-                }
-              });
             }
           });
         }

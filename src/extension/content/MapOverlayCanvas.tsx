@@ -498,12 +498,12 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
         );
 
         if (fp && fp.coordinates.length >= 3) {
-          // Main Geometric Footprint Polygon
+          // Main Geometric Footprint Polygon - radiating from fixed camera point
           if (doriLayers.maxGeometric) {
             drawPolygon(
               fp.coordinates,
-              isSelected ? 'rgba(59, 130, 246, 0.25)' : 'rgba(59, 130, 246, 0.14)',
-              cam.color || '#3b82f6',
+              isSelected ? 'rgba(37, 99, 235, 0.28)' : 'rgba(34, 197, 94, 0.20)',
+              isSelected ? '#2563EB' : '#16A34A',
               isSelected ? 2.2 : 1.4,
               camElev
             );
@@ -511,16 +511,16 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
 
           // DORI Zones
           if (doriLayers.identification && fp.doriZones.identification.length >= 3) {
-            drawPolygon(fp.doriZones.identification, 'rgba(239, 68, 68, 0.45)', DORI_COLORS.IDENTIFICATION, 1.2, camElev);
+            drawPolygon(fp.doriZones.identification, 'rgba(239, 68, 68, 0.40)', DORI_COLORS.IDENTIFICATION, 1.2, camElev);
           }
           if (doriLayers.recognition && fp.doriZones.recognition.length >= 3) {
-            drawPolygon(fp.doriZones.recognition, 'rgba(245, 158, 11, 0.35)', DORI_COLORS.RECOGNITION, 1.2, camElev);
+            drawPolygon(fp.doriZones.recognition, 'rgba(245, 158, 11, 0.30)', DORI_COLORS.RECOGNITION, 1.2, camElev);
           }
           if (doriLayers.observation && fp.doriZones.observation.length >= 3) {
-            drawPolygon(fp.doriZones.observation, 'rgba(234, 179, 8, 0.25)', DORI_COLORS.OBSERVATION, 1.2, camElev);
+            drawPolygon(fp.doriZones.observation, 'rgba(234, 179, 8, 0.20)', DORI_COLORS.OBSERVATION, 1.2, camElev);
           }
           if (doriLayers.detection && fp.doriZones.detection.length >= 3) {
-            drawPolygon(fp.doriZones.detection, 'rgba(16, 185, 129, 0.18)', DORI_COLORS.DETECTION, 1.2, camElev);
+            drawPolygon(fp.doriZones.detection, 'rgba(34, 197, 94, 0.15)', DORI_COLORS.DETECTION, 1.2, camElev);
           }
 
           // DORI Zone Distance Badges for selected camera
@@ -567,35 +567,6 @@ export const MapOverlayCanvas: React.FC<MapOverlayCanvasProps> = ({ onSelectCame
             if (doriLayers.maxGeometric && fp.coordinates.length >= 3) {
               drawZoneBadge(fp.coordinates, `Detect: ${cam.specs.datasheetDori?.detectMeters || fp.farDistanceMeters.toFixed(0)}m (Motion Only)`, '#38bdf8');
             }
-          }
-
-          // 3D Optical Sightline Frustum Rays (if selected)
-          if (isSelected && lensPt.visible && fp.coordinates.length >= 4) {
-            const cornerIndices = [
-              0,
-              Math.floor(fp.coordinates.length / 4),
-              Math.floor(fp.coordinates.length / 2),
-              Math.floor((3 * fp.coordinates.length) / 4)
-            ];
-
-            ctx.save();
-            ctx.setLineDash([4, 4]);
-            ctx.strokeStyle = cam.color || '#60a5fa';
-            ctx.lineWidth = 1;
-
-            cornerIndices.forEach((idx) => {
-              const corner = fp.coordinates[idx];
-              if (corner) {
-                const cornerPt = projectPointRealtime(corner.latitude, corner.longitude, camElev);
-                if (cornerPt.visible) {
-                  ctx.beginPath();
-                  ctx.moveTo(lensPt.x, lensPt.y);
-                  ctx.lineTo(cornerPt.x, cornerPt.y);
-                  ctx.stroke();
-                }
-              }
-            });
-            ctx.restore();
           }
         }
 

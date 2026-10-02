@@ -18,6 +18,7 @@ import { analyzeBlindSpots, analyzeOverlaps } from '../geo/analysis';
 import { storage } from '../services/storage';
 import { navigateMapToCoordinates } from '../services/mapNavigator';
 import { ParsedCamera } from '../utils/projectFileParser';
+import { SAMPLE_CAMERAS_RAJAHMUNDRY } from '../data/sampleProjects';
 
 export type BaseLayerType = 'satellite' | 'osm' | 'carto_dark' | 'carto_light';
 
@@ -78,6 +79,7 @@ interface CctvContextType {
   lastMapSnapshot: string | null;
   flyToTarget: Coordinates | null;
   setFlyToTarget: (target: Coordinates | null) => void;
+  loadCameras: (newCameras: Camera[]) => void;
   clearAllCameras: () => void;
 }
 
@@ -167,11 +169,30 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   }, []);
 
+  // Load a full project camera set and fly to primary camera
+  const loadCameras = useCallback((newCameras: Camera[]) => {
+    setCameras(newCameras);
+    if (newCameras.length > 0) {
+      setActiveCameraId(newCameras[0].id);
+      setFlyToTarget({
+        latitude: newCameras[0].position.latitude,
+        longitude: newCameras[0].position.longitude,
+        elevation: (newCameras[0].position.elevation || 0) + 200,
+        heading: newCameras[0].heading
+      });
+      storage.set('cctv_cleared_by_user', false);
+    } else {
+      setActiveCameraId(null);
+      storage.set('cctv_cleared_by_user', true);
+    }
+  }, [setFlyToTarget]);
+
   // Clear all pinned cameras and purge from storage
   const clearAllCameras = useCallback(() => {
     setCameras([]);
     setActiveCameraId(null);
     storage.set('cctv_saved_cameras', []);
+    storage.set('cctv_cleared_by_user', true);
   }, []);
 
   const [doriLayers, setDoriLayers] = useState<DoriLayerVisibility>({
@@ -186,18 +207,18 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [historyStack, setHistoryStack] = useState<Map<string, MovementHistoryEntry[]>>(new Map());
   const [isHydrated, setIsHydrated] = useState<boolean>(false);
 
-  // Hydrate state from storage on mount (starts empty, no dummy test cameras)
+  // Hydrate state from storage on mount
   useEffect(() => {
     let mounted = true;
     async function loadStoredData() {
       try {
         const storedCameras = await storage.get<Camera[]>('cctv_saved_cameras', []);
+        const wasCleared = await storage.get<boolean>('cctv_cleared_by_user', false);
         const storedPerimeter = await storage.get<PlanningPerimeter | null>('cctv_planning_perimeter', null);
         const storedToken = await storage.get<string>('cctv_cesium_ion_token', '');
         
         if (mounted) {
           if (Array.isArray(storedCameras) && storedCameras.length > 0) {
-            // Remove any legacy test dummy camera from storage and enforce strict geo-anchoring
             const validCameras = storedCameras
               .filter((c) => c.id !== 'cam-initial-1')
               .map((c) => ({
@@ -211,9 +232,14 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
               }));
             setCameras(validCameras);
             setActiveCameraId(validCameras.length > 0 ? validCameras[0].id : null);
-          } else {
+          } else if (wasCleared) {
+            // User explicitly cleared all cameras
             setCameras([]);
             setActiveCameraId(null);
+          } else {
+            // Default to real-world Rajahmundry 34-camera plan matching reference design
+            setCameras(SAMPLE_CAMERAS_RAJAHMUNDRY);
+            setActiveCameraId(SAMPLE_CAMERAS_RAJAHMUNDRY[0].id);
           }
           if (storedPerimeter) {
             setPlanningPerimeter(storedPerimeter);
@@ -867,6 +893,7 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
         lastMapSnapshot,
         flyToTarget,
         setFlyToTarget,
+        loadCameras,
         clearAllCameras
       }}
     >
