@@ -106,12 +106,15 @@ function generateFrustumArc(
 
 /**
  * Calculates a closed ground footprint polygon for a specific sub-range
+ * Supports:
+ * - Directional sector/cone (hfov < 360°)
+ * - Full 360° circular coverage (hfov >= 360° or omnidirectional)
  */
 export function calculateFootprintForRange(
   params: FrustumParams,
   nearDist: number,
   farDist: number,
-  numArcSamples: number = 8
+  numArcSamples: number = 16
 ): FootprintVertex[] {
   const { latitude, longitude, heading, hfov } = params;
 
@@ -119,10 +122,23 @@ export function calculateFootprintForRange(
     return [];
   }
 
+  // 1. Circular coverage (360° omnidirectional / fisheye / circular PTZ mode)
+  if (hfov >= 360 || hfov <= 0) {
+    const polygon: FootprintVertex[] = [];
+    const samples = Math.max(36, numArcSamples * 2);
+    for (let i = 0; i <= samples; i++) {
+      const angle = (i / samples) * 360;
+      const pt = computeDestination(latitude, longitude, angle, farDist);
+      polygon.push(pt);
+    }
+    return polygon;
+  }
+
+  // 2. Directional sector / cone coverage (hfov < 360°)
   const polygon: FootprintVertex[] = [];
 
   if (nearDist < 0.3) {
-    // If near distance is negligible, frustum originates at the camera pole ground coordinate
+    // Frustum originates at the camera pole ground coordinate
     polygon.push({ latitude, longitude });
   } else {
     // Near boundary arc from left to right
@@ -144,6 +160,9 @@ export function calculateFootprintForRange(
 
 /**
  * Computes complete camera ground footprint and DORI zones
+ * In accordance with real-world CCTV site engineering:
+ * Camera physical coverage boundary is strictly defined by maxRangeMeters.
+ * Neither optical pitch truncation nor map zoom/screen pixels modify the real-world metric reach.
  */
 export function computeCameraFootprint(
   params: FrustumParams,
@@ -156,19 +175,25 @@ export function computeCameraFootprint(
 ): FootprintGeometry {
   const { latitude, longitude, mountingHeight, tilt, vfov, hfov, maxRangeMeters } = params;
 
-  const { nearDistance, farDistance } = computeGroundDistances(
+  const { nearDistance } = computeGroundDistances(
     mountingHeight,
     tilt,
     vfov,
     maxRangeMeters
   );
 
+  // Real-world physical CCTV coverage reach is strictly defined by maxRangeMeters in meters
+  const farDistance = Math.max(1, maxRangeMeters);
+
   // Lateral chord span at far edge (well-defined up to 180° panoramic)
-  const halfHfovRad = (Math.min(180, Math.max(1, hfov)) / 2) * TO_RAD;
-  const footprintWidthFarMeters = Number((2 * farDistance * Math.sin(halfHfovRad)).toFixed(2));
+  const effectiveHfov = Math.min(360, Math.max(1, hfov));
+  const halfHfovRad = (Math.min(180, effectiveHfov) / 2) * TO_RAD;
+  const footprintWidthFarMeters = effectiveHfov >= 360
+    ? Number((2 * farDistance).toFixed(2))
+    : Number((2 * farDistance * Math.sin(halfHfovRad)).toFixed(2));
 
   // Full footprint polygon originating at the camera's fixed ground coordinate to its optical range
-  const coordinates = calculateFootprintForRange(params, 0, farDistance, 12);
+  const coordinates = calculateFootprintForRange(params, 0, farDistance, effectiveHfov >= 360 ? 36 : 16);
 
   // Calculate polygon ground area using Turf
   let totalAreaM2 = 0;
@@ -178,8 +203,9 @@ export function computeCameraFootprint(
       const turfPoly = turfPolygon([turfCoords]);
       totalAreaM2 = Number(turfArea(turfPoly).toFixed(2));
     } catch {
-      // Fallback estimate if polygon is degenerate
-      totalAreaM2 = Number((0.5 * (farDistance - nearDistance) * footprintWidthFarMeters).toFixed(2));
+      // Fallback estimate: sector area = 0.5 * r^2 * theta (in rad)
+      const thetaRad = effectiveHfov * TO_RAD;
+      totalAreaM2 = Number((0.5 * farDistance * farDistance * thetaRad).toFixed(2));
     }
   }
 
@@ -192,13 +218,13 @@ export function computeCameraFootprint(
   };
 
   if (doriRanges) {
-    const idFar = Math.min(farDistance, Math.max(nearDistance, doriRanges.identification));
-    const recFar = Math.min(farDistance, Math.max(nearDistance, doriRanges.recognition));
-    const obsFar = Math.min(farDistance, Math.max(nearDistance, doriRanges.observation));
-    const detFar = Math.min(farDistance, Math.max(nearDistance, doriRanges.detection));
+    const idFar = Math.min(farDistance, Math.max(0, doriRanges.identification));
+    const recFar = Math.min(farDistance, Math.max(0, doriRanges.recognition));
+    const obsFar = Math.min(farDistance, Math.max(0, doriRanges.observation));
+    const detFar = Math.min(farDistance, Math.max(0, doriRanges.detection));
 
-    if (idFar > nearDistance) {
-      doriZones.identification = calculateFootprintForRange(params, nearDistance, idFar, 8);
+    if (idFar > 0) {
+      doriZones.identification = calculateFootprintForRange(params, 0, idFar, 8);
     }
     if (recFar > idFar) {
       doriZones.recognition = calculateFootprintForRange(params, idFar, recFar, 8);

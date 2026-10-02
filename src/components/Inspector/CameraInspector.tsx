@@ -119,7 +119,7 @@ export const CameraInspector: React.FC<CameraInspectorProps> = ({ camera }) => {
   const handleSelectModel = (model: CameraSpecs) => {
     updateCamera(camera.id, {
       specs: { ...model },
-      rangeMeters: model.maxOpticalRangeMeters || camera.rangeMeters,
+      rangeMeters: model.rangeMeters || model.maxOpticalRangeMeters || camera.rangeMeters,
       mountingHeight: model.recommendedHeight || camera.mountingHeight,
       tilt: model.recommendedTilt || camera.tilt
     });

@@ -93,11 +93,38 @@ export const InspectTab: React.FC<InspectTabProps> = ({ onNavigateToPlaces }) =>
   const handleSelectModel = (model: CameraSpecs) => {
     updateCamera(activeCamera.id, {
       specs: { ...model },
-      rangeMeters: model.maxOpticalRangeMeters || activeCamera.rangeMeters,
+      rangeMeters: model.rangeMeters || model.maxOpticalRangeMeters || activeCamera.rangeMeters,
       mountingHeight: model.recommendedHeight || activeCamera.mountingHeight,
       tilt: model.recommendedTilt || activeCamera.tilt
     });
     setShowModelPicker(false);
+  };
+
+  const handleFocalLengthChange = (focalMm: number) => {
+    const fMin = activeCamera.specs.focalLengthMin || 2.8;
+    const fMax = activeCamera.specs.focalLengthMax || 12.0;
+    const ratio = Math.max(0, Math.min(1, (focalMm - fMin) / Math.max(0.1, fMax - fMin)));
+
+    const hMin = activeCamera.specs.hfovMin || 2.4;
+    const hMax = activeCamera.specs.hfovMax || 105;
+    const vMin = activeCamera.specs.vfovMin || 1.4;
+    const vMax = activeCamera.specs.vfovMax || 60;
+    const hfov = hMax - ratio * (hMax - hMin);
+    const vfov = vMax - ratio * (vMax - vMin);
+
+    const baseRange = activeCamera.specs.maxOpticalRangeMeters || 60;
+    const zoomRatio = focalMm / Math.max(1, fMin);
+    const newRange = Math.round(baseRange * Math.sqrt(zoomRatio));
+
+    updateCamera(activeCamera.id, {
+      rangeMeters: Math.min(2500, Math.max(10, newRange)),
+      specs: {
+        ...activeCamera.specs,
+        selectedFocalLength: Number(focalMm.toFixed(1)),
+        selectedHfov: Number(hfov.toFixed(1)),
+        selectedVfov: Number(vfov.toFixed(1))
+      }
+    });
   };
 
   const handleSaveName = () => {
@@ -370,6 +397,41 @@ export const InspectTab: React.FC<InspectTabProps> = ({ onNavigateToPlaces }) =>
               <span>Vertical FOV: {Math.round(activeCamera.specs.selectedVfov)}°</span>
             </div>
           </div>
+
+          {/* Optical Zoom / Focal Length Slider (for PTZ and Motorized Varifocal Cameras) */}
+          {activeCamera.specs.focalLengthMax && activeCamera.specs.focalLengthMin && activeCamera.specs.focalLengthMax > activeCamera.specs.focalLengthMin && (
+            <div className="inspect-control-card">
+              <div className="control-card-header">
+                <span className="control-label">Optical Zoom / Focal Length</span>
+                <span className="control-value-highlight">
+                  {(activeCamera.specs.selectedFocalLength || activeCamera.specs.focalLengthMin).toFixed(1)} mm
+                  {activeCamera.specs.opticalZoom ? ` (${activeCamera.specs.opticalZoom}x Optical)` : ''}
+                </span>
+              </div>
+              <div className="slider-wrapper">
+                <input
+                  type="range"
+                  min={activeCamera.specs.focalLengthMin}
+                  max={activeCamera.specs.focalLengthMax}
+                  step="0.1"
+                  value={activeCamera.specs.selectedFocalLength || activeCamera.specs.focalLengthMin}
+                  onChange={(e) => handleFocalLengthChange(parseFloat(e.target.value))}
+                  className="clean-range-slider"
+                  style={{
+                    background: `linear-gradient(to right, #2563EB 0%, #2563EB ${
+                      (((activeCamera.specs.selectedFocalLength || activeCamera.specs.focalLengthMin) - activeCamera.specs.focalLengthMin) /
+                        Math.max(0.1, activeCamera.specs.focalLengthMax - activeCamera.specs.focalLengthMin)) *
+                      100
+                    }%, #E2E8F0 100%)`
+                  }}
+                />
+              </div>
+              <div className="slider-scale-ticks">
+                <span>Wide: {activeCamera.specs.focalLengthMin}mm ({activeCamera.specs.hfovMax}°)</span>
+                <span>Tele: {activeCamera.specs.focalLengthMax}mm ({activeCamera.specs.hfovMin}°)</span>
+              </div>
+            </div>
+          )}
 
           {/* Range (Coverage Distance) Slider */}
           <div className="inspect-control-card">

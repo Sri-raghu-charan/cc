@@ -16,9 +16,21 @@ export interface DatasheetDori {
 }
 
 export interface CameraSpecs {
+  id?: string;
+  model?: string;
   modelName: string;
   manufacturer: string;
+  type?: CameraFormFactor;
   formFactor: CameraFormFactor;
+  rangeMeters?: number;
+  maxOpticalRangeMeters: number; // Documented geometric reach / detection range
+  horizontalFovDegrees?: number;
+  selectedHfov: number; // degrees
+  verticalFovDegrees?: number;
+  selectedVfov: number; // degrees
+  opticalZoom?: number | null;
+  digitalZoom?: number | null;
+  resolution?: string;
   resolutionWidth: number; // e.g. 1920, 2560, 3840
   resolutionHeight: number; // e.g. 1080, 1440, 2160
   megaPixels: number; // e.g. 2.0, 4.0, 8.0
@@ -29,11 +41,8 @@ export interface CameraSpecs {
   selectedFocalLength: number; // mm
   hfovMin: number; // degrees
   hfovMax: number; // degrees
-  selectedHfov: number; // degrees
   vfovMin: number; // degrees
   vfovMax: number; // degrees
-  selectedVfov: number; // degrees
-  maxOpticalRangeMeters: number; // Documented geometric reach / detection range
   irRangeMeters: number; // Documented infrared illumination range
   datasheetDori?: DatasheetDori; // Official manufacturer EN 62676-4 DORI specs
   recommendedHeight?: number; // Recommended real-world mounting height in meters
@@ -41,6 +50,16 @@ export interface CameraSpecs {
   verificationStatus: VerificationStatus;
   datasheetRef?: string;
   notes?: string;
+}
+
+export interface CameraSpecification extends CameraSpecs {
+  id: string;
+  model: string;
+  type: CameraFormFactor;
+  rangeMeters: number;
+  horizontalFovDegrees: number;
+  verticalFovDegrees: number;
+  resolution: string;
 }
 
 export interface Coordinates {

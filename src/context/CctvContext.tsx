@@ -9,7 +9,8 @@ import {
   OverlapResult,
   PlanningPerimeter
 } from '../types/camera';
-import { VERIFIED_CAMERA_MODELS } from '../data/cameraModels';
+import { VERIFIED_CAMERA_MODELS, CAMERA_SPECIFICATIONS, cameraSpecifications, getCameraSpecification } from '../data/cameraModels';
+import { logCameraCoverageDebug } from '../utils/coverageDebug';
 import { computeCameraFootprint } from '../geo/frustum';
 import { calculateDoriDistances } from '../geo/dori';
 import { moveCamera, resetCameraToOriginal } from '../geo/movement';
@@ -288,17 +289,36 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return cameras.find((c) => c.id === activeCameraId) || null;
   }, [cameras, activeCameraId]);
 
-  // Compute Footprints for all cameras
+  // Per-camera footprint cache for high-performance 500+ camera support
+  const footprintCacheRef = useRef<Map<string, { key: string; footprint: FootprintGeometry }>>(new Map());
+
+  // Compute Footprints for all cameras with per-camera caching
   const footprints = useMemo(() => {
     const map = new Map<string, FootprintGeometry>();
+    const cache = footprintCacheRef.current;
+    const currentCameraIds = new Set<string>();
 
     for (const camera of cameras) {
       if (!camera.visible) continue;
+      currentCameraIds.add(camera.id);
+
+      const hfov = camera.specs?.selectedHfov ?? camera.specs?.horizontalFovDegrees ?? 60;
+      const vfov = camera.specs?.selectedVfov ?? camera.specs?.verticalFovDegrees ?? 35;
+      const range = camera.rangeMeters || camera.specs?.rangeMeters || camera.specs?.maxOpticalRangeMeters || 60;
+
+      // Unique cache key based on geometric parameters only
+      const cacheKey = `${camera.id}_${camera.position.latitude.toFixed(7)}_${camera.position.longitude.toFixed(7)}_${camera.mountingHeight}_${camera.heading}_${camera.tilt}_${range}_${hfov}_${vfov}`;
+
+      const cached = cache.get(camera.id);
+      if (cached && cached.key === cacheKey) {
+        map.set(camera.id, cached.footprint);
+        continue;
+      }
 
       const doriDistances = calculateDoriDistances(
-        camera.specs.resolutionWidth,
-        camera.specs.selectedHfov,
-        camera.rangeMeters
+        camera.specs?.resolutionWidth || 1920,
+        hfov,
+        range
       );
 
       const fp = computeCameraFootprint(
@@ -308,14 +328,22 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
           mountingHeight: camera.mountingHeight,
           heading: camera.heading,
           tilt: camera.tilt,
-          hfov: camera.specs.selectedHfov,
-          vfov: camera.specs.selectedVfov,
-          maxRangeMeters: camera.rangeMeters
+          hfov,
+          vfov,
+          maxRangeMeters: range
         },
         doriDistances
       );
 
+      cache.set(camera.id, { key: cacheKey, footprint: fp });
       map.set(camera.id, fp);
+    }
+
+    // Purge removed cameras from cache
+    for (const cachedId of cache.keys()) {
+      if (!currentCameraIds.has(cachedId)) {
+        cache.delete(cachedId);
+      }
     }
 
     return map;
@@ -340,43 +368,38 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Select camera
   const selectCamera = useCallback((id: string | null) => {
     setActiveCameraId(id);
-  }, []);
+    if (id) {
+      const cam = cameras.find((c) => c.id === id);
+      if (cam) {
+        logCameraCoverageDebug(cam, footprints.get(id));
+      }
+    }
+  }, [cameras, footprints]);
 
-  // Add camera (Strictly Approach Lane ratio: 60° HFOV, 34° VFOV, 45m range, 18° tilt, 6m ht)
+  // Add camera: defaults to centralized CAMERA_SPECIFICATIONS[0] (EQuiVision 60m Real-World Range)
   const addCameraAtCoordinates = useCallback(
     (coords: Coordinates, specs?: any): Camera => {
       const colorIndex = cameras.length % DEFAULT_CAMERA_COLORS.length;
-
-      // All cameras strictly default to the Approach Lane Tracking standard (45m range, 18° tilt, 6m ht, 60° HFOV, 34° VFOV)
-      const approachPreset = JUNCTION_PRESETS.approach;
-      const baseSpecs = {
-        ...VERIFIED_CAMERA_MODELS[0],
-        selectedHfov: approachPreset.hfov, // 60.0°
-        selectedVfov: approachPreset.vfov, // 34.0°
-        maxOpticalRangeMeters: approachPreset.rangeMeters, // 45m
-        recommendedHeight: approachPreset.mountingHeight, // 6.0m
-        recommendedTilt: approachPreset.tilt // 18°
-      };
+      const defaultSpec = CAMERA_SPECIFICATIONS[0]; // EQuiVision EV-60M-4K (60m range)
 
       const cameraSpecs = specs
         ? {
-            ...baseSpecs,
+            ...defaultSpec,
             ...specs,
-            selectedHfov: specs.selectedHfov ?? approachPreset.hfov,
-            selectedVfov: specs.selectedVfov ?? approachPreset.vfov,
-            maxOpticalRangeMeters: specs.maxOpticalRangeMeters ?? approachPreset.rangeMeters,
-            recommendedHeight: specs.recommendedHeight ?? approachPreset.mountingHeight,
-            recommendedTilt: specs.recommendedTilt ?? approachPreset.tilt
+            rangeMeters: specs.rangeMeters ?? specs.maxOpticalRangeMeters ?? defaultSpec.rangeMeters,
+            maxOpticalRangeMeters: specs.rangeMeters ?? specs.maxOpticalRangeMeters ?? defaultSpec.rangeMeters,
+            selectedHfov: specs.selectedHfov ?? specs.horizontalFovDegrees ?? defaultSpec.selectedHfov,
+            selectedVfov: specs.selectedVfov ?? specs.verticalFovDegrees ?? defaultSpec.selectedVfov
           }
-        : baseSpecs;
+        : { ...defaultSpec };
 
-      const mountingHeight = cameraSpecs.recommendedHeight || approachPreset.mountingHeight;
-      const tilt = cameraSpecs.recommendedTilt || approachPreset.tilt;
-      const rangeMeters = cameraSpecs.maxOpticalRangeMeters || approachPreset.rangeMeters;
+      const mountingHeight = cameraSpecs.recommendedHeight || 5.0;
+      const tilt = cameraSpecs.recommendedTilt || 20;
+      const rangeMeters = cameraSpecs.rangeMeters || cameraSpecs.maxOpticalRangeMeters || 60;
 
       const newCamera: Camera = {
         id: `cam-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`,
-        name: `Camera ${cameras.length + 1}`,
+        name: `Camera ${cameras.length + 1} (${cameraSpecs.model || cameraSpecs.modelName})`,
         position: {
           latitude: Number(coords.latitude.toFixed(7)),
           longitude: Number(coords.longitude.toFixed(7)),
@@ -561,7 +584,9 @@ export const CctvProvider: React.FC<{ children: React.ReactNode }> = ({ children
         // Strip out position from general updates to prevent accidental relocation during UI events
         const safeUpdates = { ...updates };
         delete safeUpdates.position;
-        return { ...c, ...safeUpdates };
+        const updated = { ...c, ...safeUpdates };
+        logCameraCoverageDebug(updated);
+        return updated;
       })
     );
   }, []);
